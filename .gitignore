@@ -1,0 +1,12 @@
+﻿# FE
+FE/node_modules/
+FE/dist/
+
+# BE
+BE/**/bin/
+BE/**/obj/
+
+# Env
+*.user
+*.suo
+.vs/
