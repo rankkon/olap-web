@@ -9,15 +9,11 @@ interface ReportTableProps {
 
 export default function ReportTable({ title, columns, rows }: ReportTableProps) {
   return (
-    <section className="content-card">
+    <section className="content-card report-detail-table">
       <div className="card-header">
         <h3>{title}</h3>
-        <button className="btn-secondary" type="button">
-          Export CSV
-        </button>
       </div>
       <DataTable columns={columns} rows={rows} />
-      <p className="card-note">TODO: Nối export thật khi backend hoàn thiện.</p>
     </section>
   )
 }

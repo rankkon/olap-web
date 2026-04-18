@@ -5,10 +5,7 @@ export interface SelectOption {
 
 export interface FilterState {
   time: string[]
-  city: string[]
   store: string[]
   product: string[]
   customer: string[]
 }
-
-export type FilterKey = keyof FilterState

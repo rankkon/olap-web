@@ -16,6 +16,7 @@ export default function ReportDetailPage() {
       reportId={reportMeta.id}
       title={reportMeta.fullTitle}
       description={reportMeta.description}
+      filterMode={reportMeta.filterMode}
     />
   )
 }

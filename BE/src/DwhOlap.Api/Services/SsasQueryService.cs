@@ -64,8 +64,6 @@ public sealed class SsasQueryService : ISsasQueryService
 
     public async Task<QueryResult> ExecuteMdxAsync(string cube, string mdx, CancellationToken cancellationToken)
     {
-        var options = _optionsMonitor.CurrentValue;
-
         if (string.IsNullOrWhiteSpace(cube))
         {
             throw new ArgumentException("Cube is required.", nameof(cube));
@@ -76,6 +74,23 @@ public sealed class SsasQueryService : ISsasQueryService
             throw new ArgumentException("MDX is required.", nameof(mdx));
         }
 
+        return await ExecuteReaderAsync(mdx, cancellationToken);
+    }
+
+    public async Task<QueryResult> ExecuteCommandAsync(string commandText, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(commandText))
+        {
+            throw new ArgumentException("Command text is required.", nameof(commandText));
+        }
+
+        return await ExecuteReaderAsync(commandText, cancellationToken);
+    }
+
+    private async Task<QueryResult> ExecuteReaderAsync(string commandText, CancellationToken cancellationToken)
+    {
+        var options = _optionsMonitor.CurrentValue;
+
         return await Task.Run(() =>
         {
             var rows = new List<Dictionary<string, string>>();
@@ -84,7 +99,7 @@ public sealed class SsasQueryService : ISsasQueryService
             using var connection = new AdomdConnection(BuildConnectionString(options, includePassword: true));
             connection.Open();
 
-            using var command = new AdomdCommand(mdx, connection)
+            using var command = new AdomdCommand(commandText, connection)
             {
                 CommandTimeout = options.ConnectionTimeoutSeconds
             };

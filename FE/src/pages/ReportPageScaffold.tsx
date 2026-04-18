@@ -1,37 +1,50 @@
-﻿import BarChartCard from '../components/charts/BarChartCard'
+import { useEffect, useMemo, useState } from 'react'
+import BarChartCard from '../components/charts/BarChartCard'
 import LineChartCard from '../components/charts/LineChartCard'
 import PieChartCard from '../components/charts/PieChartCard'
 import EmptyState from '../components/common/EmptyState'
 import ErrorState from '../components/common/ErrorState'
 import Loading from '../components/common/Loading'
 import PageHeader from '../components/common/PageHeader'
-import MultiSelectFilter from '../components/common/MultiSelectFilter'
 import ReportTable from '../components/tables/ReportTable'
-import { useFilters } from '../hooks/useFilters'
 import { useReport } from '../hooks/useReport'
-import {
-  CITY_OPTIONS,
-  CUSTOMER_OPTIONS,
-  PRODUCT_OPTIONS,
-  STORE_OPTIONS,
-  TIME_OPTIONS,
-} from '../utils/constants'
+import { TIME_OPTIONS } from '../utils/constants'
 
 interface ReportPageScaffoldProps {
   reportId: number
   title: string
   description: string
+  filterMode?: 'none' | 'year'
+}
+
+const DEFAULT_YEAR_VALUE = TIME_OPTIONS[0]?.value ?? String(new Date().getFullYear())
+
+function resolveYear(value: string): number {
+  const parsed = Number.parseInt(value.slice(0, 4), 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : new Date().getFullYear()
 }
 
 export default function ReportPageScaffold({
   reportId,
   title,
   description,
+  filterMode = 'none',
 }: ReportPageScaffoldProps) {
-  const { data, isLoading, error, refetch } = useReport(reportId)
-  const { filters, updateFilter, resetFilters, activeFilterCount } = useFilters({
-    time: [TIME_OPTIONS[0].value],
-  })
+  const [selectedYear, setSelectedYear] = useState<number>(resolveYear(DEFAULT_YEAR_VALUE))
+  const requiresYearFilter = filterMode === 'year'
+  const yearForApi = requiresYearFilter ? selectedYear : undefined
+  const activeFilterCount = requiresYearFilter ? 1 : 0
+  const { data, isLoading, error, refetch } = useReport(reportId, yearForApi)
+
+  useEffect(() => {
+    setSelectedYear(resolveYear(DEFAULT_YEAR_VALUE))
+  }, [reportId, filterMode])
+
+  const resetFilters = () => {
+    setSelectedYear(resolveYear(DEFAULT_YEAR_VALUE))
+  }
+
+  const yearSelectValue = useMemo(() => String(selectedYear), [selectedYear])
 
   return (
     <div className="page-stack">
@@ -42,61 +55,42 @@ export default function ReportPageScaffold({
           <div className="header-action-row">
             <span className="badge-note">Filters: {activeFilterCount}</span>
             <button className="btn-primary" type="button" onClick={refetch}>
-              Refresh Mock
+              Refresh API
             </button>
           </div>
         }
       />
 
-      <section className="content-card">
-        <div className="card-header">
-          <h3>B? l?c báo cáo</h3>
-          <button className="btn-secondary" type="button" onClick={resetFilters}>
-            Reset
-          </button>
-        </div>
-        <div className="filters-grid">
-          <MultiSelectFilter
-            id="time-filter"
-            label="K? th?i gian"
-            options={TIME_OPTIONS}
-            value={filters.time}
-            onChange={(next) => updateFilter('time', next)}
-          />
-          <MultiSelectFilter
-            id="city-filter"
-            label="Thành ph?"
-            options={CITY_OPTIONS}
-            value={filters.city}
-            onChange={(next) => updateFilter('city', next)}
-          />
-          <MultiSelectFilter
-            id="store-filter"
-            label="C?a hàng"
-            options={STORE_OPTIONS}
-            value={filters.store}
-            onChange={(next) => updateFilter('store', next)}
-          />
-          <MultiSelectFilter
-            id="product-filter"
-            label="S?n ph?m"
-            options={PRODUCT_OPTIONS}
-            value={filters.product}
-            onChange={(next) => updateFilter('product', next)}
-          />
-          <MultiSelectFilter
-            id="customer-filter"
-            label="Khách hàng"
-            options={CUSTOMER_OPTIONS}
-            value={filters.customer}
-            onChange={(next) => updateFilter('customer', next)}
-          />
-        </div>
-      </section>
+      {requiresYearFilter ? (
+        <section className="content-card">
+          <div className="card-header">
+            <h3>Bo loc bao cao</h3>
+            <button className="btn-secondary" type="button" onClick={resetFilters}>
+              Reset
+            </button>
+          </div>
+          <div className="filters-grid">
+            <div className="filter-field">
+              <label htmlFor="report-year-filter">Nam</label>
+              <select
+                id="report-year-filter"
+                className="workspace-control"
+                value={yearSelectValue}
+                onChange={(event) => setSelectedYear(resolveYear(event.target.value))}
+              >
+                {TIME_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       {isLoading ? <Loading /> : null}
       {!isLoading && error ? <ErrorState message={error} onRetry={refetch} /> : null}
-
       {!isLoading && !error && data.kpis.length === 0 ? <EmptyState /> : null}
 
       {!isLoading && !error && data.kpis.length > 0 ? (
@@ -106,22 +100,20 @@ export default function ReportPageScaffold({
               <article className="kpi-card" key={kpi.label}>
                 <p>{kpi.label}</p>
                 <h3>{kpi.value}</h3>
-                <small>{kpi.trend ?? 'TODO: tính trend t? cube'}</small>
+                <small>{kpi.trend ?? '-'}</small>
               </article>
             ))}
           </section>
 
           <section className="charts-grid">
-            <BarChartCard title="Phân b? chính" points={data.barSeries} />
-            <LineChartCard title="Xu hu?ng theo th?i gian" points={data.lineSeries} />
-            <PieChartCard title="T? tr?ng danh m?c" points={data.pieSeries} />
+            <LineChartCard title="Xu huong theo thoi gian" points={data.lineSeries} />
+            <BarChartCard title="Phan bo chinh" points={data.barSeries} />
+            <PieChartCard title="Ty trong danh muc" points={data.pieSeries} />
           </section>
 
-          <ReportTable title="B?ng d? li?u chi ti?t" columns={data.columns} rows={data.rows} />
+          <ReportTable title="Bang du lieu chi tiet" columns={data.columns} rows={data.rows} />
         </>
       ) : null}
     </div>
   )
 }
-
-

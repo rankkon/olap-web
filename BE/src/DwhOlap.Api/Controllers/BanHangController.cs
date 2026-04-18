@@ -51,4 +51,31 @@ public sealed class BanHangController : ControllerBase
             Data = report
         });
     }
+
+    [HttpGet("doanhthu")]
+    public async Task<ActionResult<ApiEnvelope<ReportResponse>>> GetDoanhThu(
+        [FromQuery] string level = "year",
+        [FromQuery] int? year = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var report = await _reportService.GetDoanhThuAsync(level, year, cancellationToken);
+
+            return Ok(new ApiEnvelope<ReportResponse>
+            {
+                Success = true,
+                Message = "MDX query executed.",
+                Data = report
+            });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new ApiEnvelope<ReportResponse>
+            {
+                Success = false,
+                Message = ex.Message
+            });
+        }
+    }
 }

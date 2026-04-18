@@ -1,32 +1,60 @@
 import { useEffect, useMemo, useState } from 'react'
+import { fetchReportById } from '../api/reportApi'
 import type { ReportData } from '../types/report'
-import { EMPTY_REPORT_DATA, MOCK_REPORT_DATA } from '../utils/constants'
+import { mapReportResponseToReportData } from '../utils/reportMapper'
 
-export function useReport(reportId: number) {
+const EMPTY_REPORT_DATA: ReportData = {
+  id: 0,
+  title: 'No data',
+  description: 'No report data returned.',
+  kpis: [],
+  barSeries: [],
+  lineSeries: [],
+  pieSeries: [],
+  columns: [],
+  rows: [],
+}
+
+export function useReport(reportId: number, year?: number) {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [data, setData] = useState<ReportData | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
-    setIsLoading(true)
-    setError(null)
+    let isActive = true
 
-    const timer = window.setTimeout(() => {
-      const nextData = MOCK_REPORT_DATA[reportId]
+    const run = async () => {
+      setIsLoading(true)
+      setError(null)
 
-      if (!nextData) {
-        setError('Không tìm thấy dữ liệu mock cho report này.')
+      try {
+        const report = await fetchReportById(reportId, year)
+        if (!isActive) {
+          return
+        }
+
+        setData(mapReportResponseToReportData(reportId, report))
+      } catch (err) {
+        if (!isActive) {
+          return
+        }
+
+        const message = err instanceof Error ? err.message : 'Khong the tai du lieu tu backend.'
+        setError(message)
         setData(null)
-      } else {
-        setData(nextData)
+      } finally {
+        if (isActive) {
+          setIsLoading(false)
+        }
       }
+    }
 
-      setIsLoading(false)
-    }, 260)
-
-    return () => window.clearTimeout(timer)
-  }, [reloadKey, reportId])
+    void run()
+    return () => {
+      isActive = false
+    }
+  }, [reloadKey, reportId, year])
 
   const resolvedData = useMemo(() => data ?? EMPTY_REPORT_DATA, [data])
 

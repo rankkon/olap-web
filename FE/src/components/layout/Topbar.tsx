@@ -1,7 +1,5 @@
 import { useLocation } from 'react-router-dom'
 
-const cubeStatus = 'building'
-
 function resolvePageLabel(pathname: string): string {
   if (pathname === '/') {
     return 'Dashboard'
@@ -27,12 +25,6 @@ export default function Topbar() {
       <div>
         <p className="topbar-label">Current Module</p>
         <h3>{pageLabel}</h3>
-      </div>
-      <div className="topbar-actions">
-        <span className={`status-badge status-${cubeStatus}`}>Cube: {cubeStatus}</span>
-        <button className="btn-secondary" type="button">
-          Export Snapshot
-        </button>
       </div>
     </header>
   )

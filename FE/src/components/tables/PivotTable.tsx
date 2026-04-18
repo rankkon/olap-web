@@ -13,20 +13,20 @@ export default function PivotTable({ rowHeader, columnHeaders, rows }: PivotTabl
       <table className="data-table">
         <thead>
           <tr>
-            <th>{rowHeader}</th>
-            {columnHeaders.map((header) => (
-              <th className="align-right" key={header}>
+            <th className="align-center">{rowHeader}</th>
+            {columnHeaders.map((header, index) => (
+              <th className="align-center" key={`${header}-${index}`}>
                 {header}
               </th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
-            <tr key={row.label}>
-              <td>{row.label}</td>
+          {rows.map((row, rowIndex) => (
+            <tr key={`${row.label}-${rowIndex}`}>
+              <td className="align-center">{row.label}</td>
               {row.values.map((value, index) => (
-                <td className="align-right" key={`${row.label}-${index}`}>
+                <td className="align-center" key={`${row.label}-${index}`}>
                   {formatNumber(value)}
                 </td>
               ))}

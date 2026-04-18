@@ -38,4 +38,5 @@ export interface ReportRouteMeta {
   shortTitle: string
   fullTitle: string
   description: string
+  filterMode?: 'none' | 'year'
 }

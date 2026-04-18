@@ -20,7 +20,7 @@ public sealed class SsasOptions
 
     public string CubeTonKho { get; set; } = "CubeTonKho";
 
-    public string MeasureTongDoanhThu { get; set; } = "Tong Doanh Thu";
+    public string MeasureTongDoanhThu { get; set; } = "Tong Tien";
 
     public string MeasureSoLuongTonKho { get; set; } = "Soluongtrongkho";
 }

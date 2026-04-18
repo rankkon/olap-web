@@ -5,6 +5,10 @@ function isActiveClass(isActive: boolean) {
   return isActive ? 'nav-link nav-link-active' : 'nav-link'
 }
 
+function shortReportTitle(fullTitle: string): string {
+  return fullTitle.replace(/^bao cao\s*\d+\s*-\s*/i, '')
+}
+
 export default function Sidebar() {
   return (
     <aside className="sidebar">
@@ -32,7 +36,7 @@ export default function Sidebar() {
             <li key={report.id}>
               <NavLink className={({ isActive }) => isActiveClass(isActive)} to={report.path}>
                 <span>{report.shortTitle}</span>
-                <small>{report.fullTitle.replace('Báo cáo ', '')}</small>
+                <small>{shortReportTitle(report.fullTitle)}</small>
               </NavLink>
             </li>
           ))}
