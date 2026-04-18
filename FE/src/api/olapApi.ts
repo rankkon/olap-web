@@ -1,5 +1,10 @@
 import { requestApi } from './client'
-import type { OlapMemberFilterDto, OlapPivotResponseDto, QueryResultDto } from '../types/api'
+import type {
+  OlapMemberFilterDto,
+  OlapMetadataResponseDto,
+  OlapPivotResponseDto,
+  QueryResultDto,
+} from '../types/api'
 
 export interface OlapPivotApiRequest {
   measure: string
@@ -7,6 +12,8 @@ export interface OlapPivotApiRequest {
   columnDimension: string
   rowLevelIndex: number
   columnLevelIndex: number
+  thirdDimension?: string
+  thirdLevelIndex?: number
   year?: number
   topRows?: number
   topColumns?: number
@@ -28,4 +35,8 @@ export function executeOlapQuery(cube: string, mdx: string): Promise<QueryResult
       mdx,
     }),
   })
+}
+
+export function fetchOlapMetadata(): Promise<OlapMetadataResponseDto> {
+  return requestApi<OlapMetadataResponseDto>('/api/olap/metadata')
 }

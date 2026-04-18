@@ -27,6 +27,7 @@ export interface ReportResponseDto {
 
 export interface OlapPivotRowDto {
   label: string
+  secondaryLabel?: string | null
   values: number[]
 }
 
@@ -44,9 +45,34 @@ export interface OlapPivotResponseDto {
   rowLevelLabel: string
   columnLevelLabel: string
   rowHeader: string
+  secondaryRowHeader?: string | null
   columnHeader: string
   columnHeaders: string[]
   rows: OlapPivotRowDto[]
   total: number
   mdx: string
+}
+
+export interface OlapLevelMetadataDto {
+  key: string
+  label: string
+  levelExpression: string
+}
+
+export interface OlapDimensionMetadataDto {
+  key: string
+  label: string
+  levels: OlapLevelMetadataDto[]
+}
+
+export interface OlapMeasureMetadataDto {
+  key: string
+  label: string
+  cubeType: string
+  cubeName: string
+  dimensions: OlapDimensionMetadataDto[]
+}
+
+export interface OlapMetadataResponseDto {
+  measures: OlapMeasureMetadataDto[]
 }

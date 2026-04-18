@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react'
 import { executeOlapQuery } from '../api/olapApi'
 import type { SelectOption } from '../types/filter'
-import type { OlapDimension } from '../types/olap'
-import { OLAP_LEVEL_OPTIONS } from '../types/olap'
+import type { OlapDimension, OlapMeasureMetadata } from '../types/olap'
 
 interface OlapFilterOptions {
   time: SelectOption[]
@@ -12,12 +11,11 @@ interface OlapFilterOptions {
 }
 
 interface UseOlapFilterOptionsInput {
-  measure: string
+  measureMetadata?: OlapMeasureMetadata | null
   dimensions: OlapDimension[]
   levels: Record<OlapDimension, number>
 }
 
-type CubeType = 'banhang' | 'tonkho'
 type FilterKey = keyof OlapFilterOptions
 
 const EMPTY_OPTIONS: OlapFilterOptions = {
@@ -27,62 +25,9 @@ const EMPTY_OPTIONS: OlapFilterOptions = {
   customer: [],
 }
 
-const TIME_HIERARCHIES = [
-  '[Dim Thoi Gian].[Nam].[Nam]',
-  '[Dim Thoi Gian].[Quy].[Quy]',
-  '[Dim Thoi Gian].[Thang].[Thang]',
-] as const
-
-function cubeTypeForMeasure(measure: string): CubeType {
-  return measure === 'inventory' ? 'tonkho' : 'banhang'
-}
-
-function cubeNameForType(cubeType: CubeType): string {
-  return cubeType === 'tonkho' ? 'CubeTonKho' : 'CubeBanHang'
-}
-
-function normalizeLevelIndex(dimension: OlapDimension, levelIndex: number): number {
-  const max = OLAP_LEVEL_OPTIONS[dimension].length - 1
+function normalizeLevelIndex(levelCount: number, levelIndex: number): number {
+  const max = Math.max(levelCount - 1, 0)
   return Math.max(0, Math.min(levelIndex, max))
-}
-
-function resolveHierarchy(
-  cubeType: CubeType,
-  dimension: OlapDimension,
-  levelIndex: number,
-): string | null {
-  const normalizedIndex = normalizeLevelIndex(dimension, levelIndex)
-  if (dimension === 'time') {
-    return TIME_HIERARCHIES[normalizedIndex]
-  }
-
-  if (dimension === 'product') {
-    return '[Dim Mat Hang].[Ma Mat Hang].[Ma Mat Hang]'
-  }
-
-  if (cubeType === 'banhang') {
-    if (dimension === 'customer') {
-      return normalizedIndex === 0
-        ? '[Dim Khach Hang].[Ten Thanh Pho].[Ten Thanh Pho]'
-        : '[Dim Khach Hang].[Ten Khach Hang].[Ten Khach Hang]'
-    }
-
-    return null
-  }
-
-  if (dimension === 'store') {
-    if (normalizedIndex === 0) {
-      return '[Dim Cua Hang].[Bang].[Bang]'
-    }
-
-    if (normalizedIndex === 1) {
-      return '[Dim Cua Hang].[Ten Thanh Pho].[Ten Thanh Pho]'
-    }
-
-    return '[Dim Cua Hang].[Ma Cua Hang].[Ma Cua Hang]'
-  }
-
-  return null
 }
 
 function parseMemberKey(raw: string): string {
@@ -121,7 +66,7 @@ function formatMemberLabel(
   }
 
   const keys = parseMemberKeys(uniqueName)
-  const normalizedIndex = normalizeLevelIndex(dimension, levelIndex)
+  const normalizedIndex = normalizeLevelIndex(3, levelIndex)
   if (normalizedIndex === 0 && keys.length >= 1) {
     return keys[keys.length - 1]
   }
@@ -191,7 +136,7 @@ function toSelectOptions(
   })
 
   if (dimension === 'time') {
-    const normalizedLevel = normalizeLevelIndex(dimension, levelIndex)
+    const normalizedLevel = normalizeLevelIndex(3, levelIndex)
     if (normalizedLevel === 0) {
       return options.sort((a, b) => Number(b.label) - Number(a.label))
     }
@@ -241,14 +186,23 @@ export function useOlapFilterOptions(input: UseOlapFilterOptionsInput) {
       setError(null)
 
       try {
-        const cubeType = cubeTypeForMeasure(input.measure)
-        const cubeName = cubeNameForType(cubeType)
+        if (!input.measureMetadata) {
+          setOptions(EMPTY_OPTIONS)
+          return
+        }
+
+        const cubeName = input.measureMetadata.cubeName
         const targets = input.dimensions as FilterKey[]
 
         const responses = await Promise.all(
           targets.map(async (dimension) => {
-            const levelIndex = normalizeLevelIndex(dimension, input.levels[dimension])
-            const hierarchy = resolveHierarchy(cubeType, dimension, levelIndex)
+            const dimensionMeta = input.measureMetadata?.dimensions.find((item) => item.key === dimension)
+            if (!dimensionMeta || dimensionMeta.levels.length === 0) {
+              return { dimension, nextOptions: [] as SelectOption[] }
+            }
+
+            const levelIndex = normalizeLevelIndex(dimensionMeta.levels.length, input.levels[dimension])
+            const hierarchy = dimensionMeta.levels[levelIndex]?.levelExpression
             if (!hierarchy) {
               return { dimension, nextOptions: [] as SelectOption[] }
             }
@@ -300,7 +254,7 @@ export function useOlapFilterOptions(input: UseOlapFilterOptionsInput) {
     return () => {
       isActive = false
     }
-  }, [input.dimensions, input.levels, input.measure])
+  }, [input.dimensions, input.levels, input.measureMetadata])
 
   return {
     options,

@@ -38,6 +38,13 @@ public sealed class OlapController : ControllerBase
                     new AxisLevel("product", "Mat hang", "[Dim Mat Hang].[Ma Mat Hang].[Ma Mat Hang]")
                 }));
 
+    private static readonly IReadOnlyList<string> BanHangDimensionOrder = new[]
+    {
+        "time",
+        "customer",
+        "product"
+    };
+
     private static readonly IReadOnlyDictionary<string, DimensionDefinition> TonKhoDimensions =
         BuildDimensionDictionary(
             new DimensionDefinition("time", "Time", TimeLevels),
@@ -57,6 +64,13 @@ public sealed class OlapController : ControllerBase
                 {
                     new AxisLevel("product", "Mat hang", "[Dim Mat Hang].[Ma Mat Hang].[Ma Mat Hang]")
                 }));
+
+    private static readonly IReadOnlyList<string> TonKhoDimensionOrder = new[]
+    {
+        "time",
+        "store",
+        "product"
+    };
 
     private readonly ISsasQueryService _ssasQueryService;
     private readonly IOptionsMonitor<SsasOptions> _optionsMonitor;
@@ -88,6 +102,20 @@ public sealed class OlapController : ControllerBase
             Success = true,
             Message = "MDX query executed.",
             Data = result
+        });
+    }
+
+    [HttpGet("metadata")]
+    public ActionResult<ApiEnvelope<OlapMetadataResponse>> Metadata()
+    {
+        var options = _optionsMonitor.CurrentValue;
+        var metadata = BuildMetadata(options);
+
+        return Ok(new ApiEnvelope<OlapMetadataResponse>
+        {
+            Success = true,
+            Message = "OLAP metadata fetched.",
+            Data = metadata
         });
     }
 
@@ -128,10 +156,18 @@ public sealed class OlapController : ControllerBase
 
         var normalizedRowDimension = NormalizeDimension(request.RowDimension, availableDimensions);
         var normalizedColumnDimension = NormalizeDimension(request.ColumnDimension, availableDimensions);
+        var normalizedThirdDimension = NormalizeOptionalDimension(request.ThirdDimension, availableDimensions);
 
         if (normalizedRowDimension == normalizedColumnDimension)
         {
             throw new ArgumentException("'rowDimension' and 'columnDimension' must be different.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(normalizedThirdDimension)
+            && (normalizedThirdDimension == normalizedRowDimension
+                || normalizedThirdDimension == normalizedColumnDimension))
+        {
+            throw new ArgumentException("'thirdDimension' must be different from row/column dimensions.");
         }
 
         var topRows = Math.Clamp(request.TopRows <= 0 ? 25 : request.TopRows, 1, 250);
@@ -140,6 +176,9 @@ public sealed class OlapController : ControllerBase
 
         var rowDefinition = dimensionMap[normalizedRowDimension];
         var columnDefinition = dimensionMap[normalizedColumnDimension];
+        var thirdDefinition = string.IsNullOrWhiteSpace(normalizedThirdDimension)
+            ? null
+            : dimensionMap[normalizedThirdDimension];
 
         var requestedRowLevel = ResolveRequestedLevelIndex(
             normalizedRowDimension,
@@ -149,6 +188,12 @@ public sealed class OlapController : ControllerBase
             normalizedColumnDimension,
             request.ColumnLevelIndex,
             request.HierarchyLevel);
+        var requestedThirdLevel = thirdDefinition is null
+            ? 0
+            : ResolveRequestedLevelIndex(
+                normalizedThirdDimension!,
+                request.ThirdLevelIndex,
+                request.HierarchyLevel);
 
         var rowAxis = ResolveAxisSet(rowDefinition, requestedRowLevel, topRows);
         var columnAxis = ResolveAxisSet(
@@ -156,6 +201,13 @@ public sealed class OlapController : ControllerBase
             requestedColumnLevel,
             topColumns,
             rowAxis.LevelExpression);
+        var thirdAxis = thirdDefinition is null
+            ? null
+            : ResolveAxisSet(
+                thirdDefinition,
+                requestedThirdLevel,
+                topRows,
+                rowAxis.LevelExpression);
 
         var filters = ResolveFilters(
             request.Filters ?? Array.Empty<OlapMemberFilter>(),
@@ -163,7 +215,9 @@ public sealed class OlapController : ControllerBase
             normalizedRowDimension,
             rowAxis.LevelIndex,
             normalizedColumnDimension,
-            columnAxis.LevelIndex);
+            columnAxis.LevelIndex,
+            normalizedThirdDimension,
+            thirdAxis?.LevelIndex);
 
         var rowSetExpression = ApplyAxisFilter(
             rowAxis,
@@ -171,13 +225,31 @@ public sealed class OlapController : ControllerBase
         var columnSetExpression = ApplyAxisFilter(
             columnAxis,
             filters.TryGetValue(normalizedColumnDimension, out var columnFilter) ? columnFilter : null);
-        rowSetExpression = ApplyTopLimit(rowAxis, rowSetExpression, measure.MeasureReference);
         columnSetExpression = ApplyTopLimit(columnAxis, columnSetExpression, measure.MeasureReference);
+
+        if (thirdAxis is null || string.IsNullOrWhiteSpace(normalizedThirdDimension))
+        {
+            rowSetExpression = ApplyTopLimit(rowAxis, rowSetExpression, measure.MeasureReference, columnSetExpression);
+        }
+        else
+        {
+            var thirdSetExpression = ApplyAxisFilter(
+                thirdAxis,
+                filters.TryGetValue(normalizedThirdDimension, out var thirdFilter) ? thirdFilter : null);
+            thirdSetExpression = ApplyTopLimit(thirdAxis, thirdSetExpression, measure.MeasureReference, columnSetExpression);
+
+            var combinedRows = $"CROSSJOIN({rowSetExpression}, {thirdSetExpression})";
+            var measureSet = $"{{ {measure.MeasureReference} }}";
+            var rowContextSet = $"CROSSJOIN({columnSetExpression}, {measureSet})";
+            rowSetExpression = $"HEAD(NONEMPTY({combinedRows}, {rowContextSet}), {topRows})";
+        }
 
         var nonAxisFilters = filters.Values
             .Where(filter =>
                 !string.Equals(filter.Dimension, normalizedRowDimension, StringComparison.OrdinalIgnoreCase)
-                && !string.Equals(filter.Dimension, normalizedColumnDimension, StringComparison.OrdinalIgnoreCase))
+                && !string.Equals(filter.Dimension, normalizedColumnDimension, StringComparison.OrdinalIgnoreCase)
+                && (string.IsNullOrWhiteSpace(normalizedThirdDimension)
+                    || !string.Equals(filter.Dimension, normalizedThirdDimension, StringComparison.OrdinalIgnoreCase)))
             .OrderBy(filter => filter.Dimension, StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var fromExpression = BuildFromExpression(measure.CubeName, nonAxisFilters);
@@ -202,7 +274,9 @@ WHERE ( {string.Join(", ", whereItems)} )";
             Measure = request.Measure,
             RowDimension = normalizedRowDimension,
             ColumnDimension = normalizedColumnDimension,
+            SecondaryRowDimension = normalizedThirdDimension,
             RowLevelLabel = rowAxis.LevelLabel,
+            SecondaryRowLevelLabel = thirdAxis?.LevelLabel,
             ColumnLevelLabel = columnAxis.LevelLabel,
             Mdx = mdx
         };
@@ -210,6 +284,10 @@ WHERE ( {string.Join(", ", whereItems)} )";
 
     private static OlapPivotResponse BuildPivotResponse(PivotPlan plan, QueryResult queryResult)
     {
+        var secondaryRowHeader = string.IsNullOrWhiteSpace(plan.SecondaryRowDimension)
+            ? null
+            : ToAxisHeaderLabel(plan.SecondaryRowDimension, plan.SecondaryRowLevelLabel ?? string.Empty);
+
         if (queryResult.Columns.Count == 0)
         {
             return new OlapPivotResponse
@@ -221,13 +299,24 @@ WHERE ( {string.Join(", ", whereItems)} )";
                 RowLevelLabel = plan.RowLevelLabel,
                 ColumnLevelLabel = plan.ColumnLevelLabel,
                 RowHeader = ToAxisHeaderLabel(plan.RowDimension, plan.RowLevelLabel),
+                SecondaryRowHeader = secondaryRowHeader,
                 ColumnHeader = ToAxisHeaderLabel(plan.ColumnDimension, plan.ColumnLevelLabel),
                 Mdx = plan.Mdx
             };
         }
 
-        var rowColumn = queryResult.Columns[0];
-        var valueColumns = queryResult.Columns.Skip(1).ToArray();
+        var rowCaptionColumns = queryResult.Columns
+            .Where(column => column.Contains("[MEMBER_CAPTION]", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (rowCaptionColumns.Length == 0)
+        {
+            rowCaptionColumns = new[] { queryResult.Columns[0] };
+        }
+
+        var valueColumns = queryResult.Columns
+            .Where(column => !rowCaptionColumns.Contains(column, StringComparer.OrdinalIgnoreCase))
+            .ToArray();
+
         var rows = new List<OlapPivotRow>(queryResult.Rows.Count);
         decimal total = 0;
 
@@ -242,10 +331,21 @@ WHERE ( {string.Join(", ", whereItems)} )";
                 total += parsed;
             }
 
-            sourceRow.TryGetValue(rowColumn, out var rawLabel);
+            sourceRow.TryGetValue(rowCaptionColumns[0], out var rawLabel);
+            string? secondaryLabel = null;
+            if (!string.IsNullOrWhiteSpace(plan.SecondaryRowDimension) && rowCaptionColumns.Length > 1)
+            {
+                sourceRow.TryGetValue(rowCaptionColumns[1], out var rawSecondaryLabel);
+                secondaryLabel = FormatMemberCaption(
+                    rawSecondaryLabel,
+                    plan.SecondaryRowDimension,
+                    plan.SecondaryRowLevelLabel ?? string.Empty);
+            }
+
             rows.Add(new OlapPivotRow
             {
                 Label = FormatMemberCaption(rawLabel, plan.RowDimension, plan.RowLevelLabel),
+                SecondaryLabel = secondaryLabel,
                 Values = values
             });
         }
@@ -259,6 +359,7 @@ WHERE ( {string.Join(", ", whereItems)} )";
             RowLevelLabel = plan.RowLevelLabel,
             ColumnLevelLabel = plan.ColumnLevelLabel,
             RowHeader = ToAxisHeaderLabel(plan.RowDimension, plan.RowLevelLabel),
+            SecondaryRowHeader = secondaryRowHeader,
             ColumnHeader = ToAxisHeaderLabel(plan.ColumnDimension, plan.ColumnLevelLabel),
             ColumnHeaders = valueColumns
                 .Select(raw => FormatMemberCaption(raw, plan.ColumnDimension, plan.ColumnLevelLabel))
@@ -267,6 +368,66 @@ WHERE ( {string.Join(", ", whereItems)} )";
             Total = total,
             Mdx = plan.Mdx
         };
+    }
+
+    private static OlapMetadataResponse BuildMetadata(SsasOptions options)
+    {
+        return new OlapMetadataResponse
+        {
+            Measures = new[]
+            {
+                new OlapMeasureMetadata
+                {
+                    Key = "revenue",
+                    Label = "Revenue",
+                    CubeType = "banhang",
+                    CubeName = options.CubeBanHang,
+                    Dimensions = BuildDimensionMetadata(BanHangDimensions, BanHangDimensionOrder)
+                },
+                new OlapMeasureMetadata
+                {
+                    Key = "orderCount",
+                    Label = "Order Count",
+                    CubeType = "banhang",
+                    CubeName = options.CubeBanHang,
+                    Dimensions = BuildDimensionMetadata(BanHangDimensions, BanHangDimensionOrder)
+                },
+                new OlapMeasureMetadata
+                {
+                    Key = "inventory",
+                    Label = "Inventory",
+                    CubeType = "tonkho",
+                    CubeName = options.CubeTonKho,
+                    Dimensions = BuildDimensionMetadata(TonKhoDimensions, TonKhoDimensionOrder)
+                }
+            }
+        };
+    }
+
+    private static IReadOnlyList<OlapDimensionMetadata> BuildDimensionMetadata(
+        IReadOnlyDictionary<string, DimensionDefinition> dimensionMap,
+        IReadOnlyList<string> order)
+    {
+        return order
+            .Where(dimensionMap.ContainsKey)
+            .Select(key =>
+            {
+                var definition = dimensionMap[key];
+                return new OlapDimensionMetadata
+                {
+                    Key = definition.Key,
+                    Label = ToDimensionLabel(definition.Key),
+                    Levels = definition.Levels
+                        .Select(level => new OlapLevelMetadata
+                        {
+                            Key = level.LevelKey,
+                            Label = level.LevelLabel,
+                            LevelExpression = level.LevelExpression
+                        })
+                        .ToArray()
+                };
+            })
+            .ToArray();
     }
 
     private static string ParseAxisCaption(string raw)
@@ -378,6 +539,22 @@ WHERE ( {string.Join(", ", whereItems)} )";
         return normalized;
     }
 
+    private static string? NormalizeOptionalDimension(string? value, IReadOnlyCollection<string> supportedDimensions)
+    {
+        var normalized = value?.Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return null;
+        }
+
+        if (!supportedDimensions.Contains(normalized, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException($"Dimension '{value}' is not available for this measure.");
+        }
+
+        return normalized;
+    }
+
     private static MeasurePlan ResolveMeasure(string? measure, SsasOptions options)
     {
         var normalized = measure?.Trim().ToLowerInvariant();
@@ -468,7 +645,9 @@ WHERE ( {string.Join(", ", whereItems)} )";
         string rowDimension,
         int rowLevelIndex,
         string columnDimension,
-        int columnLevelIndex)
+        int columnLevelIndex,
+        string? thirdDimension = null,
+        int? thirdLevelIndex = null)
     {
         var resolved = new Dictionary<string, FilterSelection>(StringComparer.OrdinalIgnoreCase);
         var supportedDimensions = dimensionMap.Keys.ToArray();
@@ -493,6 +672,8 @@ WHERE ( {string.Join(", ", whereItems)} )";
             {
                 var d when d.Equals(rowDimension, StringComparison.OrdinalIgnoreCase) => rowLevelIndex,
                 var d when d.Equals(columnDimension, StringComparison.OrdinalIgnoreCase) => columnLevelIndex,
+                var d when !string.IsNullOrWhiteSpace(thirdDimension)
+                    && d.Equals(thirdDimension, StringComparison.OrdinalIgnoreCase) => thirdLevelIndex ?? rowLevelIndex,
                 _ => Math.Clamp(item.LevelIndex ?? definition.Levels.Count - 1, 0, definition.Levels.Count - 1)
             };
             var level = definition.Levels[resolvedLevelIndex];
@@ -537,14 +718,26 @@ WHERE ( {string.Join(", ", whereItems)} )";
             : $"INTERSECT({filter.MemberSetExpression}, {axis.MembersSetExpression})";
     }
 
-    private static string ApplyTopLimit(AxisSelection axis, string baseSetExpression, string measureReference)
+    private static string ApplyTopLimit(
+        AxisSelection axis,
+        string baseSetExpression,
+        string measureReference,
+        string? contextSetExpression = null)
     {
         if (!axis.ShouldLimit)
         {
             return baseSetExpression;
         }
 
-        return $"HEAD(NONEMPTY({baseSetExpression}, {{ {measureReference} }}), {axis.Top})";
+        if (string.IsNullOrWhiteSpace(contextSetExpression))
+        {
+            return $"HEAD(NONEMPTY({baseSetExpression}, {{ {measureReference} }}), {axis.Top})";
+        }
+
+        var measureSet = $"{{ {measureReference} }}";
+        var contextAwareSet = $"CROSSJOIN({contextSetExpression}, {measureSet})";
+
+        return $"HEAD(NONEMPTY({baseSetExpression}, {contextAwareSet}), {axis.Top})";
     }
 
     private static string BuildFromExpression(string cubeName, IReadOnlyList<FilterSelection> nonAxisFilters)
@@ -667,7 +860,11 @@ WHERE ( {string.Join(", ", whereItems)} )";
 
         public string ColumnDimension { get; init; } = string.Empty;
 
+        public string? SecondaryRowDimension { get; init; }
+
         public string RowLevelLabel { get; init; } = string.Empty;
+
+        public string? SecondaryRowLevelLabel { get; init; }
 
         public string ColumnLevelLabel { get; init; } = string.Empty;
 

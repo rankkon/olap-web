@@ -16,6 +16,8 @@ public sealed class OlapPivotResponse
 
     public string RowHeader { get; set; } = string.Empty;
 
+    public string? SecondaryRowHeader { get; set; }
+
     public string ColumnHeader { get; set; } = string.Empty;
 
     public IReadOnlyList<string> ColumnHeaders { get; set; } = Array.Empty<string>();
@@ -30,6 +32,8 @@ public sealed class OlapPivotResponse
 public sealed class OlapPivotRow
 {
     public string Label { get; set; } = string.Empty;
+
+    public string? SecondaryLabel { get; set; }
 
     public IReadOnlyList<decimal> Values { get; set; } = Array.Empty<decimal>();
 }

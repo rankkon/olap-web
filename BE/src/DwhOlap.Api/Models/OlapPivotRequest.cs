@@ -15,6 +15,10 @@ public sealed class OlapPivotRequest
 
     public int? ColumnLevelIndex { get; set; }
 
+    public string? ThirdDimension { get; set; }
+
+    public int? ThirdLevelIndex { get; set; }
+
     public int? Year { get; set; }
 
     public int TopRows { get; set; } = 25;

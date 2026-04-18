@@ -1,8 +1,14 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { fetchOlapPivot } from '../api/olapApi'
 import type { OlapMemberFilterDto } from '../types/api'
 import type { FilterState } from '../types/filter'
-import type { OlapDimension, OlapPivotResult, OlapQueryState } from '../types/olap'
+import type {
+  OlapDimension,
+  OlapLevelOption,
+  OlapMeasureMetadata,
+  OlapPivotResult,
+  OlapQueryState,
+} from '../types/olap'
 import { OLAP_LEVEL_OPTIONS } from '../types/olap'
 
 interface UseOlapInput {
@@ -10,6 +16,10 @@ interface UseOlapInput {
   topColumns: number
   filters: FilterState
   filterLevels: Record<OlapDimension, number>
+  measureMetadataMap?: Record<string, OlapMeasureMetadata>
+  thirdDimension?: OlapDimension | null
+  thirdLevelIndex?: number
+  enabled?: boolean
 }
 
 const defaultQuery: OlapQueryState = {
@@ -22,6 +32,7 @@ const defaultQuery: OlapQueryState = {
 
 const defaultResult: OlapPivotResult = {
   rowHeader: 'Dimension Member',
+  secondaryRowHeader: null,
   columnHeader: 'Dimension',
   rowLevelLabel: '',
   columnLevelLabel: '',
@@ -38,27 +49,13 @@ function dimensionsForMeasure(measure: string): OlapDimension[] {
   return ['time', 'customer', 'product']
 }
 
-function clampLevelIndex(dimension: OlapDimension, index: number): number {
-  const max = OLAP_LEVEL_OPTIONS[dimension].length - 1
+function clampLevelIndex(
+  dimension: OlapDimension,
+  index: number,
+  levelOptionsByDimension: Record<OlapDimension, OlapLevelOption[]>,
+): number {
+  const max = (levelOptionsByDimension[dimension] ?? OLAP_LEVEL_OPTIONS[dimension]).length - 1
   return Math.min(Math.max(index, 0), max)
-}
-
-function sanitizeQuery(next: OlapQueryState): OlapQueryState {
-  const allowed = dimensionsForMeasure(next.measure)
-  const rowDimension = allowed.includes(next.rowDimension) ? next.rowDimension : allowed[0]
-  let columnDimension = allowed.includes(next.columnDimension) ? next.columnDimension : 'time'
-
-  if (columnDimension === rowDimension) {
-    columnDimension = allowed.find((item) => item !== rowDimension) ?? 'time'
-  }
-
-  return {
-    ...next,
-    rowDimension,
-    columnDimension,
-    rowLevelIndex: clampLevelIndex(rowDimension, next.rowLevelIndex),
-    columnLevelIndex: clampLevelIndex(columnDimension, next.columnLevelIndex),
-  }
 }
 
 function uniqueDimensions(source: OlapDimension[]): OlapDimension[] {
@@ -71,10 +68,75 @@ export function useOlap(input: UseOlapInput) {
   const [result, setResult] = useState<OlapPivotResult>(defaultResult)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const normalizedMeasure = query.measure.trim().toLowerCase()
 
-  const availableDimensions = useMemo(() => dimensionsForMeasure(query.measure), [query.measure])
-  const rowLevelOptions = useMemo(() => OLAP_LEVEL_OPTIONS[query.rowDimension], [query.rowDimension])
-  const columnLevelOptions = useMemo(() => OLAP_LEVEL_OPTIONS[query.columnDimension], [query.columnDimension])
+  const activeMeasureMetadata = useMemo(
+    () => input.measureMetadataMap?.[normalizedMeasure] ?? null,
+    [input.measureMetadataMap, normalizedMeasure],
+  )
+
+  const levelOptionsByDimension = useMemo<Record<OlapDimension, OlapLevelOption[]>>(() => {
+    const fallback: Record<OlapDimension, OlapLevelOption[]> = {
+      ...OLAP_LEVEL_OPTIONS,
+    }
+
+    if (!activeMeasureMetadata) {
+      return fallback
+    }
+
+    activeMeasureMetadata.dimensions.forEach((dimension) => {
+      fallback[dimension.key] = dimension.levels.map((level) => ({ label: level.label }))
+    })
+
+    return fallback
+  }, [activeMeasureMetadata])
+
+  const availableDimensions = useMemo(() => {
+    if (activeMeasureMetadata?.dimensions?.length) {
+      return activeMeasureMetadata.dimensions.map((dimension) => dimension.key)
+    }
+
+    return dimensionsForMeasure(query.measure)
+  }, [activeMeasureMetadata, query.measure])
+
+  const availableMeasureKeys = useMemo(
+    () => Object.keys(input.measureMetadataMap ?? {}),
+    [input.measureMetadataMap],
+  )
+
+  const sanitizeQuery = useCallback((next: OlapQueryState): OlapQueryState => {
+    const normalizedMeasure = next.measure.trim().toLowerCase()
+    const measure = availableMeasureKeys.length > 0 && !availableMeasureKeys.includes(normalizedMeasure)
+      ? availableMeasureKeys[0]
+      : next.measure
+
+    const allowed = availableDimensions
+    const rowDimension = allowed.includes(next.rowDimension) ? next.rowDimension : allowed[0]
+    let columnDimension = allowed.includes(next.columnDimension) ? next.columnDimension : allowed[0]
+
+    if (columnDimension === rowDimension) {
+      columnDimension = allowed.find((item) => item !== rowDimension) ?? rowDimension
+    }
+
+    return {
+      ...next,
+      measure,
+      rowDimension,
+      columnDimension,
+      rowLevelIndex: clampLevelIndex(rowDimension, next.rowLevelIndex, levelOptionsByDimension),
+      columnLevelIndex: clampLevelIndex(columnDimension, next.columnLevelIndex, levelOptionsByDimension),
+    }
+  }, [availableDimensions, availableMeasureKeys, levelOptionsByDimension])
+
+  const rowLevelOptions = useMemo(
+    () => levelOptionsByDimension[query.rowDimension] ?? OLAP_LEVEL_OPTIONS[query.rowDimension],
+    [levelOptionsByDimension, query.rowDimension],
+  )
+  const columnLevelOptions = useMemo(
+    () => levelOptionsByDimension[query.columnDimension] ?? OLAP_LEVEL_OPTIONS[query.columnDimension],
+    [levelOptionsByDimension, query.columnDimension],
+  )
+  const isEnabled = input.enabled ?? true
 
   useEffect(() => {
     const next = sanitizeQuery(query)
@@ -87,9 +149,16 @@ export function useOlap(input: UseOlapInput) {
     ) {
       setQuery(next)
     }
-  }, [query])
+  }, [query, sanitizeQuery])
 
   useEffect(() => {
+    if (!isEnabled) {
+      setIsLoading(false)
+      setError(null)
+      setResult(defaultResult)
+      return
+    }
+
     let isActive = true
 
     const run = async () => {
@@ -101,6 +170,7 @@ export function useOlap(input: UseOlapInput) {
           ...availableDimensions,
           query.rowDimension,
           query.columnDimension,
+          ...(input.thirdDimension ? [input.thirdDimension] : []),
         ])
         const filtersPayload: OlapMemberFilterDto[] = []
 
@@ -114,7 +184,13 @@ export function useOlap(input: UseOlapInput) {
             ? query.rowLevelIndex
             : dimension === query.columnDimension
               ? query.columnLevelIndex
-              : clampLevelIndex(dimension, input.filterLevels[dimension])
+              : input.thirdDimension && dimension === input.thirdDimension
+                ? clampLevelIndex(
+                    dimension,
+                    input.thirdLevelIndex ?? input.filterLevels[dimension],
+                    levelOptionsByDimension,
+                  )
+              : clampLevelIndex(dimension, input.filterLevels[dimension], levelOptionsByDimension)
 
           filtersPayload.push({
             dimension,
@@ -129,6 +205,14 @@ export function useOlap(input: UseOlapInput) {
           columnDimension: query.columnDimension,
           rowLevelIndex: query.rowLevelIndex,
           columnLevelIndex: query.columnLevelIndex,
+          thirdDimension: input.thirdDimension ?? undefined,
+          thirdLevelIndex: input.thirdDimension
+            ? clampLevelIndex(
+                input.thirdDimension,
+                input.thirdLevelIndex ?? input.filterLevels[input.thirdDimension],
+                levelOptionsByDimension,
+              )
+            : undefined,
           topRows: input.topRows,
           topColumns: input.topColumns,
           filters: filtersPayload,
@@ -141,12 +225,14 @@ export function useOlap(input: UseOlapInput) {
 
         setResult({
           rowHeader: response.rowHeader,
+          secondaryRowHeader: response.secondaryRowHeader ?? null,
           columnHeader: response.columnHeader,
           rowLevelLabel: response.rowLevelLabel,
           columnLevelLabel: response.columnLevelLabel,
           columnHeaders: response.columnHeaders,
           rows: response.rows.map((row) => ({
             label: row.label,
+            secondaryLabel: row.secondaryLabel ?? null,
             values: row.values.map((value) => Number(value)),
           })),
           total: Number(response.total),
@@ -172,8 +258,12 @@ export function useOlap(input: UseOlapInput) {
     }
   }, [
     availableDimensions,
+    isEnabled,
     input.filterLevels,
     input.filters,
+    levelOptionsByDimension,
+    input.thirdDimension,
+    input.thirdLevelIndex,
     input.topColumns,
     input.topRows,
     query,
