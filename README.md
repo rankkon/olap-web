@@ -8,10 +8,7 @@
 - SQL Server Analysis Services (instance da deploy cube)
 - SQL Server Management Studio (khuyen nghi de kiem tra SSAS/cube)
 
-Kiem tra nhanh:
-```powershell
-dotnet --version
-```
+gõ trong terminal vs code: winget install --id Microsoft.DotNet.SDK.8 --source winget
 
 ### 2) Cau hinh ket noi SSAS
 
