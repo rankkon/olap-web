@@ -8,6 +8,9 @@ export interface OlapLevelMetadata {
   key: string
   label: string
   levelExpression: string
+  hierarchyKey?: string | null
+  hierarchyLabel?: string | null
+  hierarchyOrder?: number | null
 }
 
 export interface OlapDimensionMetadata {

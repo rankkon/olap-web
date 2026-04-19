@@ -14,9 +14,10 @@ public sealed class OlapController : ControllerBase
 {
     private static readonly IReadOnlyList<AxisLevel> TimeLevels = new[]
     {
-        new AxisLevel("year", "Nam", "[Dim Thoi Gian].[Nam].[Nam]"),
-        new AxisLevel("quarter", "Quy", "[Dim Thoi Gian].[Quy].[Quy]"),
-        new AxisLevel("month", "Thang", "[Dim Thoi Gian].[Thang].[Thang]")
+        new AxisLevel("year", "Nam", "[Dim Thoi Gian].[Nam].[Nam]", "h_time", "H_ThoiGian", 0),
+        new AxisLevel("quarter", "Quy", "[Dim Thoi Gian].[Quy].[Quy]", "h_time", "H_ThoiGian", 1),
+        new AxisLevel("month", "Thang", "[Dim Thoi Gian].[Thang].[Thang]", "h_time", "H_ThoiGian", 2),
+        new AxisLevel("timeKey", "Ma thoi gian", "[Dim Thoi Gian].[Ma Thoi Gian].[Ma Thoi Gian]")
     };
 
     private static readonly IReadOnlyDictionary<string, DimensionDefinition> BanHangDimensions =
@@ -27,15 +28,24 @@ public sealed class OlapController : ControllerBase
                 "Khach hang",
                 new[]
                 {
+                    new AxisLevel("state", "Bang", "[Dim Khach Hang].[Bang].[Bang]"),
                     new AxisLevel("city", "Thanh pho", "[Dim Khach Hang].[Ten Thanh Pho].[Ten Thanh Pho]"),
-                    new AxisLevel("customer", "Ten khach hang", "[Dim Khach Hang].[Ten Khach Hang].[Ten Khach Hang]")
+                    new AxisLevel("cityCode", "Ma thanh pho", "[Dim Khach Hang].[Ma Thanh Pho].[Ma Thanh Pho]", "h_customer", "Hierarchy", 0),
+                    new AxisLevel("customerName", "Ten khach hang", "[Dim Khach Hang].[Ten Khach Hang].[Ten Khach Hang]", "h_customer", "Hierarchy", 1),
+                    new AxisLevel("customerCode", "Ma khach hang", "[Dim Khach Hang].[Ma Khach Hang].[Ma Khach Hang]"),
+                    new AxisLevel("officeAddress", "Dia chi van phong", "[Dim Khach Hang].[Dia Chi Van Phong].[Dia Chi Van Phong]"),
+                    new AxisLevel("firstOrderDate", "Ngay dat hang dau tien", "[Dim Khach Hang].[Ngay Dat Hang Dau Tien].[Ngay Dat Hang Dau Tien]")
                 }),
             new DimensionDefinition(
                 "product",
                 "Mat hang",
                 new[]
                 {
-                    new AxisLevel("product", "Mat hang", "[Dim Mat Hang].[Ma Mat Hang].[Ma Mat Hang]")
+                    new AxisLevel("product", "Ma mat hang", "[Dim Mat Hang].[Ma Mat Hang].[Ma Mat Hang]"),
+                    new AxisLevel("size", "Kich co", "[Dim Mat Hang].[Kich Co].[Kich Co]"),
+                    new AxisLevel("weight", "Trong luong", "[Dim Mat Hang].[Trong Luong].[Trong Luong]"),
+                    new AxisLevel("price", "Gia", "[Dim Mat Hang].[Gia].[Gia]"),
+                    new AxisLevel("description", "Mo ta", "[Dim Mat Hang].[Mo Ta].[Mo Ta]")
                 }));
 
     private static readonly IReadOnlyList<string> BanHangDimensionOrder = new[]
@@ -53,16 +63,23 @@ public sealed class OlapController : ControllerBase
                 "Cua hang",
                 new[]
                 {
-                    new AxisLevel("state", "Bang", "[Dim Cua Hang].[Bang].[Bang]"),
-                    new AxisLevel("city", "Thanh pho", "[Dim Cua Hang].[Ten Thanh Pho].[Ten Thanh Pho]"),
-                    new AxisLevel("store", "Ma cua hang", "[Dim Cua Hang].[Ma Cua Hang].[Ma Cua Hang]")
+                    new AxisLevel("state", "Bang", "[Dim Cua Hang].[Bang].[Bang]", "h_store", "H_DiaLyCuaHang", 0),
+                    new AxisLevel("city", "Thanh pho", "[Dim Cua Hang].[Ten Thanh Pho].[Ten Thanh Pho]", "h_store", "H_DiaLyCuaHang", 1),
+                    new AxisLevel("cityCode", "Ma thanh pho", "[Dim Cua Hang].[Ma Thanh Pho].[Ma Thanh Pho]"),
+                    new AxisLevel("store", "Ma cua hang", "[Dim Cua Hang].[Ma Cua Hang].[Ma Cua Hang]", "h_store", "H_DiaLyCuaHang", 2),
+                    new AxisLevel("officeAddress", "Dia chi van phong", "[Dim Cua Hang].[Dia Chi Van Phong].[Dia Chi Van Phong]"),
+                    new AxisLevel("phone", "So dien thoai", "[Dim Cua Hang].[So Dien Thoai].[So Dien Thoai]")
                 }),
             new DimensionDefinition(
                 "product",
                 "Mat hang",
                 new[]
                 {
-                    new AxisLevel("product", "Mat hang", "[Dim Mat Hang].[Ma Mat Hang].[Ma Mat Hang]")
+                    new AxisLevel("product", "Ma mat hang", "[Dim Mat Hang].[Ma Mat Hang].[Ma Mat Hang]"),
+                    new AxisLevel("size", "Kich co", "[Dim Mat Hang].[Kich Co].[Kich Co]"),
+                    new AxisLevel("weight", "Trong luong", "[Dim Mat Hang].[Trong Luong].[Trong Luong]"),
+                    new AxisLevel("price", "Gia", "[Dim Mat Hang].[Gia].[Gia]"),
+                    new AxisLevel("description", "Mo ta", "[Dim Mat Hang].[Mo Ta].[Mo Ta]")
                 }));
 
     private static readonly IReadOnlyList<string> TonKhoDimensionOrder = new[]
@@ -425,7 +442,10 @@ WHERE ( {string.Join(", ", whereItems)} )";
                         {
                             Key = level.LevelKey,
                             Label = level.LevelLabel,
-                            LevelExpression = level.LevelExpression
+                            LevelExpression = level.LevelExpression,
+                            HierarchyKey = level.HierarchyKey,
+                            HierarchyLabel = level.HierarchyLabel,
+                            HierarchyOrder = level.HierarchyOrder
                         })
                         .ToArray()
                 };
@@ -905,11 +925,20 @@ WHERE ( {string.Join(", ", whereItems)} )";
     {
         private static readonly Regex LevelExpressionPattern = new(@"^(.*)\.\[[^\]]+\]$", RegexOptions.Compiled);
 
-        public AxisLevel(string levelKey, string levelLabel, string levelExpression)
+        public AxisLevel(
+            string levelKey,
+            string levelLabel,
+            string levelExpression,
+            string? hierarchyKey = null,
+            string? hierarchyLabel = null,
+            int? hierarchyOrder = null)
         {
             LevelKey = levelKey;
             LevelLabel = levelLabel;
             LevelExpression = levelExpression;
+            HierarchyKey = hierarchyKey;
+            HierarchyLabel = hierarchyLabel;
+            HierarchyOrder = hierarchyOrder;
             MemberPrefix = ResolveMemberPrefix(levelExpression);
         }
 
@@ -918,6 +947,12 @@ WHERE ( {string.Join(", ", whereItems)} )";
         public string LevelLabel { get; }
 
         public string LevelExpression { get; }
+
+        public string? HierarchyKey { get; }
+
+        public string? HierarchyLabel { get; }
+
+        public int? HierarchyOrder { get; }
 
         public string MemberPrefix { get; }
 

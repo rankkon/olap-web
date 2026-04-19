@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { executeOlapQuery } from '../api/olapApi'
 import ErrorState from '../components/common/ErrorState'
 import Loading from '../components/common/Loading'
@@ -13,6 +13,7 @@ import { formatNumber } from '../utils/format'
 
 const LEVEL_DRAG_MIME = 'application/x-olap-tree-level-v2'
 const SELECTED_LEVEL_DRAG_MIME = 'application/x-olap-selected-level-v2'
+const PAGE_SIZE = 200
 
 interface CubeOption {
   value: string
@@ -28,6 +29,9 @@ interface SelectedLevel {
   levelLabel: string
   levelIndex: number
   levelExpression: string
+  hierarchyKey?: string | null
+  hierarchyLabel?: string | null
+  hierarchyOrder?: number | null
 }
 
 interface LevelDragPayload {
@@ -37,6 +41,9 @@ interface LevelDragPayload {
   levelLabel: string
   levelIndex: number
   levelExpression: string
+  hierarchyKey?: string | null
+  hierarchyLabel?: string | null
+  hierarchyOrder?: number | null
 }
 
 interface DisplayTable {
@@ -50,8 +57,10 @@ interface PivotRenderData {
     label: string
     values: string[]
   }>
-  measureLabel: string
-  measureValues: string[]
+  measureRows: Array<{
+    label: string
+    values: string[]
+  }>
 }
 
 interface MemberColumns {
@@ -65,16 +74,36 @@ const EMPTY_TABLE: DisplayTable = {
   total: 0,
 }
 
-function rowLimitForLevelCount(levelCount: number): number {
-  if (levelCount >= 3) {
-    return 1200
+function toSelectedLevel(payload: LevelDragPayload): SelectedLevel {
+  return {
+    id: buildLevelId(payload.dimension, payload.levelKey),
+    dimension: payload.dimension,
+    dimensionLabel: payload.dimensionLabel,
+    levelKey: payload.levelKey,
+    levelLabel: payload.levelLabel,
+    levelIndex: payload.levelIndex,
+    levelExpression: payload.levelExpression,
+    hierarchyKey: payload.hierarchyKey ?? null,
+    hierarchyLabel: payload.hierarchyLabel ?? null,
+    hierarchyOrder: payload.hierarchyOrder ?? null,
   }
+}
 
-  if (levelCount === 2) {
-    return 2400
-  }
+function omitRecordKey<T>(source: Record<string, T>, key: string): Record<string, T> {
+  const next = { ...source }
+  delete next[key]
+  return next
+}
 
-  return 5000
+function buildLevelValueMap(
+  selectedLevels: SelectedLevel[],
+  source?: Record<string, string[]>,
+): Record<string, string[]> {
+  const next: Record<string, string[]> = {}
+  selectedLevels.forEach((level) => {
+    next[level.id] = source?.[level.id] ? [...source[level.id]] : []
+  })
+  return next
 }
 
 function buildLevelId(dimension: OlapDimension, levelKey: string): string {
@@ -288,14 +317,18 @@ function buildCrossJoin(sets: string[]): string {
 }
 
 function buildExplorerMdx(
-  measureExpression: string,
+  measureExpressions: string[],
   cubeName: string,
   selectedLevels: SelectedLevel[],
   appliedFilters: Record<string, string[]>,
+  rowOffset: number,
+  pageSize: number,
 ): string {
+  const measuresSet = `{ ${measureExpressions.join(', ')} }`
+
   if (selectedLevels.length === 0) {
     return [
-      `SELECT { ${measureExpression} } ON COLUMNS`,
+      `SELECT ${measuresSet} ON COLUMNS`,
       `FROM [${escapeMdxIdentifier(cubeName)}]`,
     ].join('\n')
   }
@@ -316,10 +349,10 @@ function buildExplorerMdx(
   })
 
   const combinedSet = buildCrossJoin(levelSets)
-  const limitedRows = `HEAD(NONEMPTY(${combinedSet}, { ${measureExpression} }), ${rowLimitForLevelCount(selectedLevels.length)})`
+  const limitedRows = `SUBSET(NONEMPTY(${combinedSet}, ${measuresSet}), ${Math.max(0, rowOffset)}, ${pageSize})`
   return [
     'SELECT',
-    `  { ${measureExpression} } ON COLUMNS,`,
+    `  ${measuresSet} ON COLUMNS,`,
     `  ${limitedRows} DIMENSION PROPERTIES MEMBER_CAPTION, MEMBER_UNIQUE_NAME ON ROWS`,
     `FROM [${escapeMdxIdentifier(cubeName)}]`,
   ].join('\n')
@@ -328,7 +361,7 @@ function buildExplorerMdx(
 function normalizeFlatTable(
   result: QueryResultDto,
   selectedLevels: SelectedLevel[],
-  measureLabel: string,
+  measureLabels: string[],
 ): DisplayTable {
   const captionColumns = result.columns.filter((column) => column.includes('[MEMBER_CAPTION]'))
   const uniqueColumns = new Set(result.columns.filter((column) => column.includes('[MEMBER_UNIQUE_NAME]')))
@@ -337,23 +370,30 @@ function normalizeFlatTable(
   )
 
   if (selectedLevels.length === 0) {
-    const firstValueColumn = valueColumns[0] ?? result.columns.find((column) => !uniqueColumns.has(column)) ?? ''
-    const rawValue = result.rows[0]?.[firstValueColumn] ?? '0'
+    const measureColumns = valueColumns.length > 0
+      ? valueColumns
+      : result.columns.filter((column) => !uniqueColumns.has(column))
+    const columns: TableColumn[] = measureColumns.map((_, index) => ({
+      key: `measure_${index}`,
+      label: measureLabels[index] ?? `Measure ${index + 1}`,
+      align: 'center',
+    }))
+
+    const row: TableRow = {}
+    let total = 0
+    measureColumns.forEach((column, index) => {
+      const rawValue = result.rows[0]?.[column] ?? '0'
+      const parsed = tryParseNumber(rawValue)
+      if (parsed !== null) {
+        total += parsed
+      }
+      row[`measure_${index}`] = formatMeasureValue(rawValue)
+    })
 
     return {
-      columns: [
-        {
-          key: 'measure',
-          label: measureLabel,
-          align: 'center',
-        },
-      ],
-      rows: [
-        {
-          measure: formatMeasureValue(rawValue),
-        },
-      ],
-      total: tryParseNumber(rawValue) ?? 0,
+      columns,
+      rows: [row],
+      total,
     }
   }
 
@@ -373,7 +413,7 @@ function normalizeFlatTable(
   valueColumns.forEach((_column, index) => {
     columns.push({
       key: `value_${index}`,
-      label: index === 0 ? measureLabel : `Measure ${index + 1}`,
+      label: measureLabels[index] ?? `Measure ${index + 1}`,
       align: 'center',
     })
   })
@@ -415,19 +455,21 @@ function normalizeFlatTable(
 function toPivotRenderData(
   table: DisplayTable,
   selectedLevels: SelectedLevel[],
-  measureLabel: string,
+  measureLabels: string[],
 ): PivotRenderData {
   const levelRows = selectedLevels.map((level, levelIndex) => ({
     label: `${level.dimensionLabel} - ${level.levelLabel}`,
     values: table.rows.map((row) => String(row[`level_${levelIndex}`] ?? '-')),
   }))
 
-  const measureValues = table.rows.map((row) => String(row.value_0 ?? '-'))
+  const measureRows = measureLabels.map((label, measureIndex) => ({
+    label,
+    values: table.rows.map((row) => String(row[`value_${measureIndex}`] ?? '-')),
+  }))
 
   return {
     levelRows,
-    measureLabel,
-    measureValues,
+    measureRows,
   }
 }
 
@@ -455,6 +497,9 @@ function safeParseLevelPayload(raw: string): LevelDragPayload | null {
       levelLabel: parsed.levelLabel ?? parsed.levelKey,
       levelIndex: parsed.levelIndex,
       levelExpression: parsed.levelExpression,
+      hierarchyKey: parsed.hierarchyKey ?? null,
+      hierarchyLabel: parsed.hierarchyLabel ?? null,
+      hierarchyOrder: typeof parsed.hierarchyOrder === 'number' ? parsed.hierarchyOrder : null,
     }
   } catch {
     return null
@@ -464,6 +509,7 @@ function safeParseLevelPayload(raw: string): LevelDragPayload | null {
 export default function OlapExplorerPage() {
   const [selectedCubeName, setSelectedCubeName] = useState('')
   const [selectedMeasureKey, setSelectedMeasureKey] = useState('')
+  const [selectedMeasureKeys, setSelectedMeasureKeys] = useState<string[]>([])
   const [selectedLevels, setSelectedLevels] = useState<SelectedLevel[]>([])
   const [expandedDimensions, setExpandedDimensions] = useState<Partial<Record<OlapDimension, boolean>>>({})
   const [isPivoted, setIsPivoted] = useState(false)
@@ -478,8 +524,13 @@ export default function OlapExplorerPage() {
   const [filterError, setFilterError] = useState<string | null>(null)
 
   const [table, setTable] = useState<DisplayTable>(EMPTY_TABLE)
+  const tableRef = useRef<DisplayTable>(EMPTY_TABLE)
+  const loadMoreScrollYRef = useRef<number | null>(null)
   const [pivotData, setPivotData] = useState<PivotRenderData | null>(null)
   const [isQueryLoading, setIsQueryLoading] = useState(false)
+  const [isLoadingMore, setIsLoadingMore] = useState(false)
+  const [rowOffset, setRowOffset] = useState(0)
+  const [hasMoreRows, setHasMoreRows] = useState(false)
   const [queryError, setQueryError] = useState<string | null>(null)
 
   const {
@@ -487,6 +538,41 @@ export default function OlapExplorerPage() {
     isLoading: isMetadataLoading,
     error: metadataError,
   } = useOlapMetadata()
+
+  const restoreScrollAfterLoadMore = () => {
+    const targetY = loadMoreScrollYRef.current
+    if (targetY === null) {
+      return
+    }
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        window.scrollTo({
+          top: targetY,
+          behavior: 'auto',
+        })
+        loadMoreScrollYRef.current = null
+      })
+    })
+  }
+
+  function resetPagination() {
+    setRowOffset(0)
+    setHasMoreRows(false)
+  }
+
+  function clearWorkspaceSelections() {
+    setSelectedLevels([])
+    setDraftFilters({})
+    setAppliedFilters({})
+    setOptionsByLevel({})
+    setIsPivoted(false)
+    resetPagination()
+  }
+
+  useEffect(() => {
+    tableRef.current = table
+  }, [table])
 
   const cubeOptions = useMemo<CubeOption[]>(() => {
     const groups = new Map<string, CubeOption>()
@@ -517,6 +603,7 @@ export default function OlapExplorerPage() {
       const firstCube = cubeOptions[0]
       setSelectedCubeName(firstCube.value)
       setSelectedMeasureKey(firstCube.measures[0]?.key ?? '')
+      setSelectedMeasureKeys(firstCube.measures[0] ? [firstCube.measures[0].key] : [])
     }
   }, [cubeOptions, selectedCubeName])
 
@@ -535,12 +622,61 @@ export default function OlapExplorerPage() {
     }
   }, [selectedCube, selectedMeasureKey])
 
+  useEffect(() => {
+    if (!selectedCube || selectedCube.measures.length === 0) {
+      setSelectedMeasureKeys([])
+      return
+    }
+
+    const allowed = new Set(selectedCube.measures.map((measure) => measure.key))
+    const normalized = selectedMeasureKeys.filter((key) => allowed.has(key))
+    if (normalized.length === 0) {
+      setSelectedMeasureKeys([selectedCube.measures[0].key])
+      return
+    }
+
+    if (normalized.length !== selectedMeasureKeys.length) {
+      setSelectedMeasureKeys(normalized)
+    }
+  }, [selectedCube, selectedMeasureKeys])
+
   const selectedMeasure = useMemo(
     () => selectedCube?.measures.find((measure) => measure.key === selectedMeasureKey) ?? null,
     [selectedCube, selectedMeasureKey],
   )
 
-  const dimensionsForMeasure = selectedMeasure?.dimensions ?? []
+  const activeMeasures = useMemo(() => {
+    if (!selectedCube) {
+      return [] as OlapMeasureMetadata[]
+    }
+
+    const picked = selectedCube.measures.filter((measure) => selectedMeasureKeys.includes(measure.key))
+    if (picked.length > 0) {
+      return picked
+    }
+
+    return selectedMeasure ? [selectedMeasure] : []
+  }, [selectedCube, selectedMeasure, selectedMeasureKeys])
+
+  const activeMeasureExpressions = useMemo(
+    () => activeMeasures.map((measure) => measure.measureExpression),
+    [activeMeasures],
+  )
+
+  const activeMeasureLabels = useMemo(
+    () => activeMeasures.map((measure) => measure.label),
+    [activeMeasures],
+  )
+
+  const dimensionsForMeasure = useMemo(
+    () => selectedMeasure?.dimensions ?? [],
+    [selectedMeasure],
+  )
+
+  const allowedDimensionKeys = useMemo(
+    () => new Set(dimensionsForMeasure.map((dimension) => dimension.key)),
+    [dimensionsForMeasure],
+  )
 
   useEffect(() => {
     if (!selectedMeasure) {
@@ -548,9 +684,8 @@ export default function OlapExplorerPage() {
       return
     }
 
-    const allowedDimensions = new Set(dimensionsForMeasure.map((dimension) => dimension.key))
-    setSelectedLevels((previous) => previous.filter((level) => allowedDimensions.has(level.dimension)))
-  }, [dimensionsForMeasure, selectedMeasure])
+    setSelectedLevels((previous) => previous.filter((level) => allowedDimensionKeys.has(level.dimension)))
+  }, [allowedDimensionKeys, selectedMeasure])
 
   useEffect(() => {
     setExpandedDimensions((previous) => {
@@ -565,21 +700,8 @@ export default function OlapExplorerPage() {
   }, [dimensionsForMeasure])
 
   useEffect(() => {
-    setDraftFilters((previous) => {
-      const next: Record<string, string[]> = {}
-      selectedLevels.forEach((level) => {
-        next[level.id] = previous[level.id] ?? []
-      })
-      return next
-    })
-
-    setAppliedFilters((previous) => {
-      const next: Record<string, string[]> = {}
-      selectedLevels.forEach((level) => {
-        next[level.id] = previous[level.id] ?? []
-      })
-      return next
-    })
+    setDraftFilters((previous) => buildLevelValueMap(selectedLevels, previous))
+    setAppliedFilters((previous) => buildLevelValueMap(selectedLevels, previous))
   }, [selectedLevels])
 
   useEffect(() => {
@@ -646,26 +768,46 @@ export default function OlapExplorerPage() {
   }, [selectedLevels, selectedMeasure, refreshToken])
 
   useEffect(() => {
+    resetPagination()
+  }, [activeMeasureExpressions, appliedFilters, refreshToken, selectedLevels, selectedMeasure])
+
+  useEffect(() => {
     let isActive = true
 
     const run = async () => {
       if (!selectedMeasure) {
+        tableRef.current = EMPTY_TABLE
         setTable(EMPTY_TABLE)
         setPivotData(null)
+        setHasMoreRows(false)
         setQueryError(null)
+        setIsLoadingMore(false)
         setIsQueryLoading(false)
         return
       }
 
-      setIsQueryLoading(true)
+      const isLoadMoreRequest = selectedLevels.length > 0 && rowOffset > 0
+      if (isLoadMoreRequest) {
+        setIsLoadingMore(true)
+      } else {
+        setIsQueryLoading(true)
+      }
       setQueryError(null)
 
       try {
+        const measureExpressions = activeMeasureExpressions.length > 0
+          ? activeMeasureExpressions
+          : [selectedMeasure.measureExpression]
+        const measureLabels = activeMeasureLabels.length > 0
+          ? activeMeasureLabels
+          : [selectedMeasure.label]
         const mdx = buildExplorerMdx(
-          selectedMeasure.measureExpression,
+          measureExpressions,
           selectedMeasure.cubeName,
           selectedLevels,
           appliedFilters,
+          rowOffset,
+          PAGE_SIZE,
         )
 
         setMdxPreview(mdx)
@@ -675,25 +817,57 @@ export default function OlapExplorerPage() {
           return
         }
 
-        const normalized = normalizeFlatTable(queryResult, selectedLevels, selectedMeasure.label)
-        setTable(normalized)
+        const normalized = normalizeFlatTable(
+          queryResult,
+          selectedLevels,
+          measureLabels,
+        )
+        const nextTable = isLoadMoreRequest
+          ? {
+              columns: tableRef.current.columns.length > 0 ? tableRef.current.columns : normalized.columns,
+              rows: [...tableRef.current.rows, ...normalized.rows],
+              total: tableRef.current.total + normalized.total,
+            }
+          : normalized
+
+        tableRef.current = nextTable
+        setTable(nextTable)
+        setHasMoreRows(selectedLevels.length > 0 && normalized.rows.length === PAGE_SIZE)
         setPivotData(
           selectedLevels.length > 0
-            ? toPivotRenderData(normalized, selectedLevels, selectedMeasure.label)
+            ? toPivotRenderData(
+              nextTable,
+              selectedLevels,
+              measureLabels,
+            )
             : null,
         )
+        if (isLoadMoreRequest) {
+          restoreScrollAfterLoadMore()
+        }
       } catch (error) {
         if (!isActive) {
           return
         }
 
         const message = error instanceof Error ? error.message : 'Khong the lay du lieu tu cube.'
-        setQueryError(message)
-        setTable(EMPTY_TABLE)
-        setPivotData(null)
+        if (!isLoadMoreRequest) {
+          setQueryError(message)
+          tableRef.current = EMPTY_TABLE
+          setTable(EMPTY_TABLE)
+          setPivotData(null)
+          setHasMoreRows(false)
+        } else {
+          setLastAction(`Tai them du lieu that bai: ${message}`)
+          restoreScrollAfterLoadMore()
+        }
       } finally {
         if (isActive) {
-          setIsQueryLoading(false)
+          if (isLoadMoreRequest) {
+            setIsLoadingMore(false)
+          } else {
+            setIsQueryLoading(false)
+          }
         }
       }
     }
@@ -703,7 +877,7 @@ export default function OlapExplorerPage() {
     return () => {
       isActive = false
     }
-  }, [appliedFilters, refreshToken, selectedLevels, selectedMeasure])
+  }, [activeMeasureExpressions, activeMeasureLabels, appliedFilters, refreshToken, rowOffset, selectedLevels, selectedMeasure])
 
   const selectedLevelIds = useMemo(
     () => new Set(selectedLevels.map((level) => level.id)),
@@ -723,8 +897,8 @@ export default function OlapExplorerPage() {
       .map((level) => `${level.dimensionLabel}.${level.levelLabel}`)
       .join(' > ')
 
-    return `${isPivoted ? 'Pivot mode' : 'Tabular mode'} | ${levelPath}`
-  }, [isPivoted, selectedLevels, selectedMeasure])
+    return levelPath
+  }, [selectedLevels, selectedMeasure])
 
   const appliedFilterTotal = useMemo(
     () => activeFilterCount(selectedLevels, appliedFilters),
@@ -739,24 +913,32 @@ export default function OlapExplorerPage() {
 
     setSelectedCubeName(nextCubeName)
     setSelectedMeasureKey(nextCube.measures[0].key)
-    setSelectedLevels([])
+    setSelectedMeasureKeys([nextCube.measures[0].key])
     setExpandedDimensions({})
-    setDraftFilters({})
-    setAppliedFilters({})
-    setOptionsByLevel({})
-    setIsPivoted(false)
+    clearWorkspaceSelections()
     setLastAction(`Da chuyen cube: ${nextCubeName}`)
   }
 
-  const handleMeasureChange = (nextMeasure: string) => {
-    setSelectedMeasureKey(nextMeasure)
-    setSelectedLevels([])
-    setExpandedDimensions({})
-    setDraftFilters({})
-    setAppliedFilters({})
-    setOptionsByLevel({})
-    setIsPivoted(false)
-    setLastAction('Da doi measure.')
+  const toggleMeasureSelection = (measureKey: string) => {
+    setSelectedMeasureKeys((previous) => {
+      if (!previous.includes(measureKey)) {
+        setSelectedMeasureKey(measureKey)
+        setLastAction('Da them measure vao ket qua.')
+        return [...previous, measureKey]
+      }
+
+      if (previous.length <= 1) {
+        setLastAction('Can giu it nhat 1 measure.')
+        return previous
+      }
+
+      const next = previous.filter((key) => key !== measureKey)
+      if (measureKey === selectedMeasureKey) {
+        setSelectedMeasureKey(next[0])
+      }
+      setLastAction('Da bo measure khoi ket qua.')
+      return next
+    })
   }
 
   const handleDropLevel = (event: React.DragEvent<HTMLDivElement>) => {
@@ -773,14 +955,11 @@ export default function OlapExplorerPage() {
       return
     }
 
-    const nextLevel: SelectedLevel = {
-      id: buildLevelId(payload.dimension, payload.levelKey),
-      dimension: payload.dimension,
-      dimensionLabel: payload.dimensionLabel,
-      levelKey: payload.levelKey,
-      levelLabel: payload.levelLabel,
-      levelIndex: payload.levelIndex,
-      levelExpression: payload.levelExpression,
+    const nextLevel = toSelectedLevel(payload)
+
+    if (!allowedDimensionKeys.has(nextLevel.dimension)) {
+      setLastAction('Level khong thuoc measure hien tai.')
+      return
     }
 
     if (selectedLevelIds.has(nextLevel.id)) {
@@ -788,9 +967,21 @@ export default function OlapExplorerPage() {
       return
     }
 
-    const allowedDimensions = new Set(dimensionsForMeasure.map((dimension) => dimension.key))
-    if (!allowedDimensions.has(nextLevel.dimension)) {
+    setSelectedLevels((previous) => [...previous, nextLevel])
+    setLastAction(`Da them level ${nextLevel.dimensionLabel} - ${nextLevel.levelLabel}.`)
+  }
+
+  const toggleLevelFromTree = (payload: LevelDragPayload) => {
+    const nextLevel = toSelectedLevel(payload)
+
+    if (!allowedDimensionKeys.has(nextLevel.dimension)) {
       setLastAction('Level khong thuoc measure hien tai.')
+      return
+    }
+
+    if (selectedLevelIds.has(nextLevel.id)) {
+      removeLevel(nextLevel.id)
+      setLastAction(`Da xoa level ${nextLevel.dimensionLabel} - ${nextLevel.levelLabel}.`)
       return
     }
 
@@ -820,22 +1011,71 @@ export default function OlapExplorerPage() {
 
   const removeLevel = (levelId: string) => {
     setSelectedLevels((previous) => previous.filter((level) => level.id !== levelId))
-    setDraftFilters((previous) => {
-      const next = { ...previous }
-      delete next[levelId]
-      return next
-    })
-    setAppliedFilters((previous) => {
-      const next = { ...previous }
-      delete next[levelId]
-      return next
-    })
-    setOptionsByLevel((previous) => {
-      const next = { ...previous }
-      delete next[levelId]
-      return next
-    })
+    setDraftFilters((previous) => omitRecordKey(previous, levelId))
+    setAppliedFilters((previous) => omitRecordKey(previous, levelId))
+    setOptionsByLevel((previous) => omitRecordKey(previous, levelId))
     setLastAction('Da xoa level khoi layout.')
+  }
+
+  const getHierarchyRollTarget = (level: SelectedLevel, direction: -1 | 1) => {
+    const dimension = dimensionsForMeasure.find((item) => item.key === level.dimension)
+    if (!dimension) {
+      return null
+    }
+
+    let chain = dimension.levels
+      .filter((item) => item.hierarchyKey === level.hierarchyKey && item.hierarchyOrder != null)
+      .sort((left, right) => (left.hierarchyOrder ?? 0) - (right.hierarchyOrder ?? 0))
+
+    if (chain.length === 0) {
+      const fallbackOrderByDimension: Partial<Record<OlapDimension, string[]>> = {
+        time: ['year', 'quarter', 'month'],
+        store: ['state', 'city', 'store'],
+        customer: ['cityCode', 'customerName'],
+      }
+
+      const fallbackOrder = fallbackOrderByDimension[level.dimension] ?? []
+      if (fallbackOrder.length > 0) {
+        chain = fallbackOrder
+          .map((key) => dimension.levels.find((item) => item.key === key))
+          .filter((item): item is NonNullable<typeof item> => Boolean(item))
+      }
+    }
+
+    if (chain.length === 0) {
+      return null
+    }
+
+    const currentPosition = chain.findIndex((item) => item.key === level.levelKey)
+    if (currentPosition < 0) {
+      return null
+    }
+
+    const targetPosition = currentPosition + direction
+    if (targetPosition < 0 || targetPosition >= chain.length) {
+      return null
+    }
+
+    const target = chain[targetPosition]
+    const targetIndex = dimension.levels.findIndex((item) => item.key === target.key)
+    if (targetIndex < 0) {
+      return null
+    }
+
+    return {
+      target,
+      targetId: buildLevelId(level.dimension, target.key),
+      targetIndex,
+    }
+  }
+
+  const canRollLevel = (level: SelectedLevel, direction: -1 | 1): boolean => {
+    const target = getHierarchyRollTarget(level, direction)
+    if (!target) {
+      return false
+    }
+
+    return !selectedLevels.some((item) => item.id === target.targetId && item.id !== level.id)
   }
 
   const rollLevel = (levelId: string, direction: -1 | 1) => {
@@ -844,19 +1084,12 @@ export default function OlapExplorerPage() {
       return
     }
 
-    const dimension = dimensionsForMeasure.find((item) => item.key === current.dimension)
-    if (!dimension) {
+    const target = getHierarchyRollTarget(current, direction)
+    if (!target) {
       return
     }
 
-    const nextIndex = current.levelIndex + direction
-    if (nextIndex < 0 || nextIndex >= dimension.levels.length) {
-      return
-    }
-
-    const nextLevel = dimension.levels[nextIndex]
-    const nextId = buildLevelId(current.dimension, nextLevel.key)
-    const duplicate = selectedLevels.some((item) => item.id === nextId && item.id !== current.id)
+    const duplicate = selectedLevels.some((item) => item.id === target.targetId && item.id !== current.id)
     if (duplicate) {
       setLastAction('Level muc tieu da ton tai trong layout.')
       return
@@ -870,33 +1103,34 @@ export default function OlapExplorerPage() {
 
         return {
           ...item,
-          id: nextId,
-          levelKey: nextLevel.key,
-          levelLabel: nextLevel.label,
-          levelIndex: nextIndex,
-          levelExpression: nextLevel.levelExpression,
+          id: target.targetId,
+          levelKey: target.target.key,
+          levelLabel: target.target.label,
+          levelIndex: target.targetIndex,
+          levelExpression: target.target.levelExpression,
+          hierarchyKey: target.target.hierarchyKey ?? null,
+          hierarchyLabel: target.target.hierarchyLabel ?? null,
+          hierarchyOrder: target.target.hierarchyOrder ?? null,
         }
       }),
     )
 
     setDraftFilters((previous) => {
       const next = { ...previous }
-      next[nextId] = next[levelId] ?? []
+      next[target.targetId] = next[levelId] ?? []
       delete next[levelId]
       return next
     })
     setAppliedFilters((previous) => {
       const next = { ...previous }
-      next[nextId] = next[levelId] ?? []
+      next[target.targetId] = next[levelId] ?? []
       delete next[levelId]
       return next
     })
     setOptionsByLevel((previous) => {
-      const next = { ...previous }
-      delete next[levelId]
-      return next
+      return omitRecordKey(previous, levelId)
     })
-    setLastAction(direction > 0 ? 'Da drill down level.' : 'Da roll up level.')
+    setLastAction(direction > 0 ? 'Da drill down theo hierarchy.' : 'Da roll up theo hierarchy.')
   }
 
   const toggleDimension = (dimension: OlapDimension) => {
@@ -914,27 +1148,19 @@ export default function OlapExplorerPage() {
   }
 
   const applyFilters = () => {
-    const nextApplied: Record<string, string[]> = {}
-    selectedLevels.forEach((level) => {
-      nextApplied[level.id] = [...(draftFilters[level.id] ?? [])]
-    })
-
-    setAppliedFilters(nextApplied)
+    setAppliedFilters(buildLevelValueMap(selectedLevels, draftFilters))
     setLastAction('Da ap dung bo loc.')
   }
 
   const clearFilters = () => {
-    const cleared: Record<string, string[]> = {}
-    selectedLevels.forEach((level) => {
-      cleared[level.id] = []
-    })
-
+    const cleared = buildLevelValueMap(selectedLevels)
     setDraftFilters(cleared)
     setAppliedFilters(cleared)
     setLastAction('Da xoa bo loc.')
   }
 
   const refreshData = () => {
+    resetPagination()
     setRefreshToken((previous) => previous + 1)
     setLastAction('Da refresh du lieu tu cube.')
   }
@@ -945,12 +1171,18 @@ export default function OlapExplorerPage() {
   }
 
   const resetLayout = () => {
-    setSelectedLevels([])
-    setDraftFilters({})
-    setAppliedFilters({})
-    setOptionsByLevel({})
-    setIsPivoted(false)
+    clearWorkspaceSelections()
     setLastAction('Da reset layout.')
+  }
+
+  const loadMoreRows = () => {
+    if (!hasMoreRows || isQueryLoading || isLoadingMore || selectedLevels.length === 0) {
+      return
+    }
+
+    loadMoreScrollYRef.current = window.scrollY
+    setRowOffset((previous) => previous + PAGE_SIZE)
+    setLastAction(`Dang tai them ${PAGE_SIZE} dong...`)
   }
 
   return (
@@ -968,22 +1200,6 @@ export default function OlapExplorerPage() {
               {cubeOptions.map((cube) => (
                 <option key={cube.value} value={cube.value}>
                   {cube.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="olap-toolbar-group">
-            <label htmlFor="measure-select">Measure</label>
-            <select
-              id="measure-select"
-              value={selectedMeasureKey}
-              disabled={!selectedCube || selectedCube.measures.length === 0}
-              onChange={(event) => handleMeasureChange(event.target.value)}
-            >
-              {(selectedCube?.measures ?? []).map((measure) => (
-                <option key={measure.key} value={measure.key}>
-                  {measure.label}
                 </option>
               ))}
             </select>
@@ -1063,7 +1279,7 @@ export default function OlapExplorerPage() {
                       <div className="selected-level-actions">
                         <button
                           className="btn-secondary axis-mini-btn"
-                          disabled={level.levelIndex <= 0}
+                          disabled={!canRollLevel(level, -1)}
                           onClick={() => rollLevel(level.id, -1)}
                           type="button"
                           title="Roll up"
@@ -1072,11 +1288,7 @@ export default function OlapExplorerPage() {
                         </button>
                         <button
                           className="btn-secondary axis-mini-btn"
-                          disabled={
-                            level.levelIndex >= (
-                              dimensionsForMeasure.find((item) => item.key === level.dimension)?.levels.length ?? 1
-                            ) - 1
-                          }
+                          disabled={!canRollLevel(level, 1)}
                           onClick={() => rollLevel(level.id, 1)}
                           type="button"
                           title="Drill down"
@@ -1099,7 +1311,7 @@ export default function OlapExplorerPage() {
             </div>
 
             <p className="card-note">
-              Tabular mode: level tren cot, ban ghi tren dong. Pivot mode: xoay level sang truc cot de so sanh nhanh.
+              Nhap cac level theo thu tu phan tich, bam Pivot de doi cach nhin du lieu.
             </p>
           </section>
 
@@ -1146,7 +1358,6 @@ export default function OlapExplorerPage() {
           <section className="content-card">
             <div className="card-header">
               <h3>Bang ket qua OLAP</h3>
-              <span className="badge-note">{isPivoted ? 'Pivot mode' : 'Tabular mode'}</span>
             </div>
 
             {isQueryLoading ? <Loading /> : null}
@@ -1154,7 +1365,7 @@ export default function OlapExplorerPage() {
 
             {!isQueryLoading && !queryError ? (
               <>
-                {isPivoted && pivotData && pivotData.measureValues.length > 0 ? (
+                {isPivoted && pivotData && pivotData.measureRows.length > 0 ? (
                   <div className="table-wrap">
                     <table className="data-table pivot-grid-table">
                       <thead>
@@ -1170,14 +1381,16 @@ export default function OlapExplorerPage() {
                         ))}
                       </thead>
                       <tbody>
-                        <tr>
-                          <td className="align-center pivot-measure-label">{pivotData.measureLabel}</td>
-                          {pivotData.measureValues.map((value, colIndex) => (
-                            <td className="align-center" key={`pivot-value-${colIndex}`}>
-                              {value}
-                            </td>
-                          ))}
-                        </tr>
+                        {pivotData.measureRows.map((measureRow, rowIndex) => (
+                          <tr key={`pivot-measure-row-${rowIndex}`}>
+                            <td className="align-center pivot-measure-label">{measureRow.label}</td>
+                            {measureRow.values.map((value, colIndex) => (
+                              <td className="align-center" key={`pivot-value-${rowIndex}-${colIndex}`}>
+                                {value}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
                       </tbody>
                     </table>
                   </div>
@@ -1186,6 +1399,14 @@ export default function OlapExplorerPage() {
                 ) : (
                   <p className="card-note">Khong co du lieu de hien thi.</p>
                 )}
+
+                {hasMoreRows && !queryError && selectedLevels.length > 0 ? (
+                  <div className="olap-see-more-row">
+                    <button className="btn-secondary" disabled={isLoadingMore} onClick={loadMoreRows} type="button">
+                      {isLoadingMore ? 'Dang tai...' : 'See more'}
+                    </button>
+                  </div>
+                ) : null}
 
                 <details className="olap-mdx-preview">
                   <summary>MDX generated</summary>
@@ -1204,6 +1425,30 @@ export default function OlapExplorerPage() {
           <p className="card-note">
             Expand dimension, keo level vao Workspace layout. Co the keo nhieu level cua cung mot dimension.
           </p>
+
+          <section className="dimension-tree-node measure-tree-node">
+            <button className="dimension-tree-toggle" type="button">
+              <span className="tree-toggle-icon">M</span>
+              <span className="dimension-node-label">Measures</span>
+            </button>
+            <ul className="dimension-tree-levels">
+              {(selectedCube?.measures ?? []).map((measure) => {
+                const active = selectedMeasureKeys.includes(measure.key)
+                return (
+                  <li className="dimension-tree-level-item" key={`measure-${measure.key}`}>
+                    <button
+                      className={`dimension-level-drag measure-choice-button ${active ? 'is-selected' : ''}`}
+                      onClick={() => toggleMeasureSelection(measure.key)}
+                      type="button"
+                    >
+                      <span className="tree-level-icon">M</span>
+                      <span>{measure.label}</span>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          </section>
 
           <div className="dimension-tree-list">
             {dimensionsForMeasure.map((dimension) => {
@@ -1232,6 +1477,9 @@ export default function OlapExplorerPage() {
                           levelLabel: level.label,
                           levelIndex: dimension.levels.findIndex((item) => item.key === level.key),
                           levelExpression: level.levelExpression,
+                          hierarchyKey: level.hierarchyKey ?? null,
+                          hierarchyLabel: level.hierarchyLabel ?? null,
+                          hierarchyOrder: level.hierarchyOrder ?? null,
                         }
 
                         return (
@@ -1239,6 +1487,7 @@ export default function OlapExplorerPage() {
                             <button
                               className={`dimension-level-drag ${placed ? 'is-selected' : ''}`}
                               draggable
+                              onClick={() => toggleLevelFromTree(payload)}
                               onDragStart={(event) => {
                                 const serialized = JSON.stringify(payload)
                                 event.dataTransfer.effectAllowed = 'move'

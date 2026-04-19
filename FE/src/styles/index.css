@@ -614,7 +614,7 @@ a {
 
 .olap-toolbar-grid-singleline {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto;
+  grid-template-columns: minmax(220px, 1fr) auto;
   gap: 10px;
   align-items: end;
 }
@@ -791,6 +791,13 @@ a {
 
 .olap-mdx-preview {
   margin-top: 10px;
+}
+
+.olap-see-more-row {
+  margin-top: 12px;
+  display: flex;
+  justify-content: center;
+  overflow-anchor: none;
 }
 
 .olap-mdx-preview summary {
@@ -1050,6 +1057,11 @@ a {
 
 .dimension-level-drag:active {
   cursor: grabbing;
+}
+
+.measure-choice-button,
+.measure-choice-button:active {
+  cursor: pointer;
 }
 
 .level-drag-handle {

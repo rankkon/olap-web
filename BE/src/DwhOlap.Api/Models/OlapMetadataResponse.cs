@@ -36,4 +36,10 @@ public sealed class OlapLevelMetadata
     public string Label { get; set; } = string.Empty;
 
     public string LevelExpression { get; set; } = string.Empty;
+
+    public string? HierarchyKey { get; set; }
+
+    public string? HierarchyLabel { get; set; }
+
+    public int? HierarchyOrder { get; set; }
 }
