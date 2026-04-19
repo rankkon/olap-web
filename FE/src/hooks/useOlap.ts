@@ -19,6 +19,7 @@ interface UseOlapInput {
   measureMetadataMap?: Record<string, OlapMeasureMetadata>
   thirdDimension?: OlapDimension | null
   thirdLevelIndex?: number
+  refreshToken?: number
   enabled?: boolean
 }
 
@@ -262,6 +263,7 @@ export function useOlap(input: UseOlapInput) {
     input.filterLevels,
     input.filters,
     levelOptionsByDimension,
+    input.refreshToken,
     input.thirdDimension,
     input.thirdLevelIndex,
     input.topColumns,

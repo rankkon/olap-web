@@ -70,6 +70,7 @@ export interface OlapMeasureMetadataDto {
   label: string
   cubeType: string
   cubeName: string
+  measureExpression: string
   dimensions: OlapDimensionMetadataDto[]
 }
 

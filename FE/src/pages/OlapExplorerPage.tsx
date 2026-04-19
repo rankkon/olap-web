@@ -1,672 +1,1266 @@
 import { useEffect, useMemo, useState } from 'react'
+import { executeOlapQuery } from '../api/olapApi'
 import ErrorState from '../components/common/ErrorState'
 import Loading from '../components/common/Loading'
 import MultiSelectFilter from '../components/common/MultiSelectFilter'
-import PageHeader from '../components/common/PageHeader'
-import PivotTable from '../components/tables/PivotTable'
-import { useOlap } from '../hooks/useOlap'
-import { useOlapFilterOptions } from '../hooks/useOlapFilterOptions'
+import DataTable from '../components/tables/DataTable'
 import { useOlapMetadata } from '../hooks/useOlapMetadata'
-import type { FilterState } from '../types/filter'
-import type { OlapDimension, OlapLevelOption, OlapMeasureMetadata } from '../types/olap'
-import { OLAP_LEVEL_OPTIONS } from '../types/olap'
+import type { QueryResultDto } from '../types/api'
+import type { SelectOption } from '../types/filter'
+import type { OlapDimension, OlapMeasureMetadata } from '../types/olap'
+import type { TableColumn, TableRow } from '../types/report'
 import { formatNumber } from '../utils/format'
 
-const ALL_DIMENSIONS: OlapDimension[] = ['time', 'store', 'product', 'customer']
+const LEVEL_DRAG_MIME = 'application/x-olap-tree-level-v2'
+const SELECTED_LEVEL_DRAG_MIME = 'application/x-olap-selected-level-v2'
 
-const EMPTY_FILTERS: FilterState = {
-  time: [],
-  store: [],
-  product: [],
-  customer: [],
+interface CubeOption {
+  value: string
+  label: string
+  measures: OlapMeasureMetadata[]
 }
 
-const DEFAULT_FILTER_LEVELS: Record<OlapDimension, number> = {
-  time: 0,
-  store: 2,
-  product: 0,
-  customer: 1,
+interface SelectedLevel {
+  id: string
+  dimension: OlapDimension
+  dimensionLabel: string
+  levelKey: string
+  levelLabel: string
+  levelIndex: number
+  levelExpression: string
 }
 
-const DIMENSION_LABELS: Record<OlapDimension, string> = {
-  time: 'Thoi gian',
-  store: 'Cua hang',
-  product: 'Mat hang',
-  customer: 'Khach hang',
+interface LevelDragPayload {
+  dimension: OlapDimension
+  dimensionLabel: string
+  levelKey: string
+  levelLabel: string
+  levelIndex: number
+  levelExpression: string
 }
 
-const DEFAULT_TOP_ROWS = 20
-const DEFAULT_TOP_COLUMNS = 12
-const MAX_DIMENSION_COUNT = 3
+interface DisplayTable {
+  columns: TableColumn[]
+  rows: TableRow[]
+  total: number
+}
 
-function sameStringArray(left: string[], right: string[]): boolean {
-  if (left.length !== right.length) {
-    return false
+interface PivotRenderData {
+  levelRows: Array<{
+    label: string
+    values: string[]
+  }>
+  measureLabel: string
+  measureValues: string[]
+}
+
+interface MemberColumns {
+  captionColumn: string
+  uniqueColumn: string
+}
+
+const EMPTY_TABLE: DisplayTable = {
+  columns: [],
+  rows: [],
+  total: 0,
+}
+
+function rowLimitForLevelCount(levelCount: number): number {
+  if (levelCount >= 3) {
+    return 1200
   }
 
-  return left.every((value, index) => value === right[index])
-}
-
-function safeInt(value: string, fallback: number, min: number, max: number): number {
-  const parsed = Number.parseInt(value, 10)
-  if (!Number.isFinite(parsed)) {
-    return fallback
+  if (levelCount === 2) {
+    return 2400
   }
 
-  return Math.min(Math.max(parsed, min), max)
+  return 5000
 }
 
-function clampDimensionCount(value: number, maxAllowed: number): number {
-  return Math.min(Math.max(value, 0), Math.min(MAX_DIMENSION_COUNT, maxAllowed))
+function buildLevelId(dimension: OlapDimension, levelKey: string): string {
+  return `${dimension}::${levelKey}`
 }
 
-function toLevelOptionsMap(measure: OlapMeasureMetadata | null): Record<OlapDimension, OlapLevelOption[]> {
-  const fallback: Record<OlapDimension, OlapLevelOption[]> = {
-    ...OLAP_LEVEL_OPTIONS,
+function formatCubeLabel(cubeType: string, cubeName: string): string {
+  const normalized = cubeType.trim().toLowerCase()
+  if (normalized === 'banhang') {
+    return `Ban hang (${cubeName})`
   }
 
-  if (!measure) {
-    return fallback
+  if (normalized === 'tonkho') {
+    return `Ton kho (${cubeName})`
   }
 
-  measure.dimensions.forEach((dimension) => {
-    fallback[dimension.key] = dimension.levels.map((level) => ({ label: level.label }))
+  return `${cubeType} (${cubeName})`
+}
+
+function escapeMdxIdentifier(value: string): string {
+  return value.replace(/]/g, ']]')
+}
+
+function parseMemberKeys(raw: string): string[] {
+  return [...raw.matchAll(/&\[([^\]]+)\]/g)].map((match) => match[1].trim())
+}
+
+function parseMemberCaption(raw: string): string {
+  const keyMatches = parseMemberKeys(raw)
+  if (keyMatches.length > 0) {
+    return keyMatches[keyMatches.length - 1]
+  }
+
+  const bracketMatches = [...raw.matchAll(/\[([^\]]+)\]/g)].map((match) => match[1].trim())
+  if (bracketMatches.length > 0) {
+    return bracketMatches[bracketMatches.length - 1]
+  }
+
+  return raw.trim()
+}
+
+function tryParseNumber(value: string): number | null {
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  const asInvariant = Number(trimmed.replace(/,/g, ''))
+  if (Number.isFinite(asInvariant)) {
+    return asInvariant
+  }
+
+  const asVi = Number(trimmed.replace(/\./g, '').replace(',', '.'))
+  if (Number.isFinite(asVi)) {
+    return asVi
+  }
+
+  return null
+}
+
+function formatMeasureValue(value: string): string {
+  const parsed = tryParseNumber(value)
+  if (parsed === null) {
+    return value || '-'
+  }
+
+  return formatNumber(parsed)
+}
+
+function formatTimeCaption(level: SelectedLevel, captionRaw: string, uniqueRaw: string): string {
+  const caption = captionRaw.trim() || parseMemberCaption(uniqueRaw)
+  const keys = parseMemberKeys(uniqueRaw)
+
+  if (level.levelKey === 'year') {
+    return keys[keys.length - 1] ?? caption
+  }
+
+  if (level.levelKey === 'quarter') {
+    if (keys.length >= 2) {
+      return `${keys[keys.length - 2]} - Q${keys[keys.length - 1]}`
+    }
+
+    return caption.startsWith('Q') ? caption.toUpperCase() : `Q${caption}`
+  }
+
+  if (level.levelKey === 'month') {
+    if (keys.length >= 2) {
+      return `${keys[keys.length - 2]} - Thang ${keys[keys.length - 1]}`
+    }
+
+    return caption.startsWith('Thang ') ? caption : `Thang ${caption}`
+  }
+
+  return caption
+}
+
+function formatLevelCell(level: SelectedLevel, captionRaw: string, uniqueRaw: string): string {
+  if (level.dimension !== 'time') {
+    return captionRaw.trim() || parseMemberCaption(uniqueRaw)
+  }
+
+  return formatTimeCaption(level, captionRaw, uniqueRaw)
+}
+
+function resolveMemberColumns(columns: string[]): MemberColumns {
+  const firstColumn = columns[0] ?? ''
+  const captionColumn = columns.find((column) => column.includes('[MEMBER_CAPTION]')) ?? firstColumn
+  const uniqueColumn = columns.find((column) => column.includes('[MEMBER_UNIQUE_NAME]')) ?? captionColumn
+  return {
+    captionColumn,
+    uniqueColumn,
+  }
+}
+
+function membersQuery(cubeName: string, levelExpression: string, limit: number): string {
+  return [
+    'SELECT {[Measures].DefaultMember} ON COLUMNS,',
+    `NON EMPTY HEAD(${levelExpression}.MEMBERS, ${limit}) DIMENSION PROPERTIES MEMBER_CAPTION, MEMBER_UNIQUE_NAME ON ROWS`,
+    `FROM [${escapeMdxIdentifier(cubeName)}]`,
+  ].join(' ')
+}
+
+function toOptionValue(captionRaw: string, uniqueRaw: string): string {
+  if (uniqueRaw.startsWith('[')) {
+    return uniqueRaw
+  }
+
+  return parseMemberCaption(captionRaw)
+}
+
+function toMemberOptions(result: QueryResultDto, level: SelectedLevel): SelectOption[] {
+  if (result.columns.length === 0) {
+    return []
+  }
+
+  const { captionColumn, uniqueColumn } = resolveMemberColumns(result.columns)
+  const seen = new Set<string>()
+  const options: SelectOption[] = []
+
+  result.rows.forEach((row) => {
+    const captionRaw = (row[captionColumn] ?? '').trim()
+    const uniqueRaw = (row[uniqueColumn] ?? '').trim()
+    const value = toOptionValue(captionRaw, uniqueRaw)
+
+    if (!value || seen.has(value)) {
+      return
+    }
+
+    seen.add(value)
+    options.push({
+      value,
+      label: formatLevelCell(level, captionRaw, uniqueRaw),
+    })
   })
 
-  return fallback
+  return options
+}
+
+function normalizeFilterMap(
+  source: Record<string, string[]>,
+  selectedLevels: SelectedLevel[],
+  optionsByLevel: Record<string, SelectOption[]>,
+): Record<string, string[]> {
+  const allowedIds = new Set(selectedLevels.map((level) => level.id))
+  const next: Record<string, string[]> = {}
+
+  Object.entries(source).forEach(([levelId, values]) => {
+    if (!allowedIds.has(levelId)) {
+      return
+    }
+
+    const options = optionsByLevel[levelId]
+    if (!options || options.length === 0) {
+      next[levelId] = []
+      return
+    }
+
+    const allowedValues = new Set(options.map((item) => item.value))
+    next[levelId] = values.filter((item) => allowedValues.has(item))
+  })
+
+  selectedLevels.forEach((level) => {
+    if (!next[level.id]) {
+      next[level.id] = []
+    }
+  })
+
+  return next
+}
+
+function buildMemberSetExpression(values: string[]): string {
+  const uniqueMembers = values
+    .map((item) => item.trim())
+    .filter((item) => item.startsWith('['))
+
+  return `{ ${uniqueMembers.join(', ')} }`
+}
+
+function buildCrossJoin(sets: string[]): string {
+  if (sets.length === 0) {
+    return ''
+  }
+
+  return sets.reduce((accumulator, current) => {
+    if (!accumulator) {
+      return current
+    }
+
+    return `CROSSJOIN(${accumulator}, ${current})`
+  }, '')
+}
+
+function buildExplorerMdx(
+  measureExpression: string,
+  cubeName: string,
+  selectedLevels: SelectedLevel[],
+  appliedFilters: Record<string, string[]>,
+): string {
+  if (selectedLevels.length === 0) {
+    return [
+      `SELECT { ${measureExpression} } ON COLUMNS`,
+      `FROM [${escapeMdxIdentifier(cubeName)}]`,
+    ].join('\n')
+  }
+
+  const levelSets = selectedLevels.map((level) => {
+    const baseSet = `${level.levelExpression}.MEMBERS`
+    const members = appliedFilters[level.id] ?? []
+    if (members.length === 0) {
+      return baseSet
+    }
+
+    const memberSet = buildMemberSetExpression(members)
+    if (memberSet === '{  }') {
+      return baseSet
+    }
+
+    return `INTERSECT(${memberSet}, ${baseSet})`
+  })
+
+  const combinedSet = buildCrossJoin(levelSets)
+  const limitedRows = `HEAD(NONEMPTY(${combinedSet}, { ${measureExpression} }), ${rowLimitForLevelCount(selectedLevels.length)})`
+  return [
+    'SELECT',
+    `  { ${measureExpression} } ON COLUMNS,`,
+    `  ${limitedRows} DIMENSION PROPERTIES MEMBER_CAPTION, MEMBER_UNIQUE_NAME ON ROWS`,
+    `FROM [${escapeMdxIdentifier(cubeName)}]`,
+  ].join('\n')
+}
+
+function normalizeFlatTable(
+  result: QueryResultDto,
+  selectedLevels: SelectedLevel[],
+  measureLabel: string,
+): DisplayTable {
+  const captionColumns = result.columns.filter((column) => column.includes('[MEMBER_CAPTION]'))
+  const uniqueColumns = new Set(result.columns.filter((column) => column.includes('[MEMBER_UNIQUE_NAME]')))
+  const valueColumns = result.columns.filter(
+    (column) => !column.includes('[MEMBER_CAPTION]') && !column.includes('[MEMBER_UNIQUE_NAME]'),
+  )
+
+  if (selectedLevels.length === 0) {
+    const firstValueColumn = valueColumns[0] ?? result.columns.find((column) => !uniqueColumns.has(column)) ?? ''
+    const rawValue = result.rows[0]?.[firstValueColumn] ?? '0'
+
+    return {
+      columns: [
+        {
+          key: 'measure',
+          label: measureLabel,
+          align: 'center',
+        },
+      ],
+      rows: [
+        {
+          measure: formatMeasureValue(rawValue),
+        },
+      ],
+      total: tryParseNumber(rawValue) ?? 0,
+    }
+  }
+
+  const columns: TableColumn[] = []
+
+  captionColumns.forEach((_, index) => {
+    const selectedLevel = selectedLevels[index]
+    columns.push({
+      key: `level_${index}`,
+      label: selectedLevel
+        ? `${selectedLevel.dimensionLabel} - ${selectedLevel.levelLabel}`
+        : `Level ${index + 1}`,
+      align: 'center',
+    })
+  })
+
+  valueColumns.forEach((_column, index) => {
+    columns.push({
+      key: `value_${index}`,
+      label: index === 0 ? measureLabel : `Measure ${index + 1}`,
+      align: 'center',
+    })
+  })
+
+  let total = 0
+  const rows: TableRow[] = result.rows.map((sourceRow) => {
+    const targetRow: TableRow = {}
+
+    captionColumns.forEach((captionColumn, index) => {
+      const uniqueColumn = captionColumn.replace('[MEMBER_CAPTION]', '[MEMBER_UNIQUE_NAME]')
+      const selectedLevel = selectedLevels[index]
+      const captionRaw = sourceRow[captionColumn] ?? ''
+      const uniqueRaw = sourceRow[uniqueColumn] ?? ''
+
+      targetRow[`level_${index}`] = selectedLevel
+        ? formatLevelCell(selectedLevel, captionRaw, uniqueRaw)
+        : (captionRaw || parseMemberCaption(uniqueRaw) || '-')
+    })
+
+    valueColumns.forEach((valueColumn, index) => {
+      const rawValue = sourceRow[valueColumn] ?? ''
+      const parsed = tryParseNumber(rawValue)
+      if (parsed !== null) {
+        total += parsed
+      }
+      targetRow[`value_${index}`] = formatMeasureValue(rawValue)
+    })
+
+    return targetRow
+  })
+
+  return {
+    columns,
+    rows,
+    total,
+  }
+}
+
+function toPivotRenderData(
+  table: DisplayTable,
+  selectedLevels: SelectedLevel[],
+  measureLabel: string,
+): PivotRenderData {
+  const levelRows = selectedLevels.map((level, levelIndex) => ({
+    label: `${level.dimensionLabel} - ${level.levelLabel}`,
+    values: table.rows.map((row) => String(row[`level_${levelIndex}`] ?? '-')),
+  }))
+
+  const measureValues = table.rows.map((row) => String(row.value_0 ?? '-'))
+
+  return {
+    levelRows,
+    measureLabel,
+    measureValues,
+  }
+}
+
+function activeFilterCount(selectedLevels: SelectedLevel[], appliedFilters: Record<string, string[]>): number {
+  return selectedLevels.reduce((count, level) => {
+    if ((appliedFilters[level.id] ?? []).length > 0) {
+      return count + 1
+    }
+
+    return count
+  }, 0)
+}
+
+function safeParseLevelPayload(raw: string): LevelDragPayload | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<LevelDragPayload>
+    if (!parsed.dimension || !parsed.levelKey || !parsed.levelExpression || typeof parsed.levelIndex !== 'number') {
+      return null
+    }
+
+    return {
+      dimension: parsed.dimension,
+      dimensionLabel: parsed.dimensionLabel ?? parsed.dimension,
+      levelKey: parsed.levelKey,
+      levelLabel: parsed.levelLabel ?? parsed.levelKey,
+      levelIndex: parsed.levelIndex,
+      levelExpression: parsed.levelExpression,
+    }
+  } catch {
+    return null
+  }
 }
 
 export default function OlapExplorerPage() {
-  const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS)
-  const [filterLevels, setFilterLevels] = useState<Record<OlapDimension, number>>(DEFAULT_FILTER_LEVELS)
-  const [topRows, setTopRows] = useState(DEFAULT_TOP_ROWS)
-  const [topColumns, setTopColumns] = useState(DEFAULT_TOP_COLUMNS)
-  const [dimensionCount, setDimensionCount] = useState(2)
-  const [thirdDimension, setThirdDimension] = useState<OlapDimension | null>('product')
+  const [selectedCubeName, setSelectedCubeName] = useState('')
+  const [selectedMeasureKey, setSelectedMeasureKey] = useState('')
+  const [selectedLevels, setSelectedLevels] = useState<SelectedLevel[]>([])
+  const [expandedDimensions, setExpandedDimensions] = useState<Partial<Record<OlapDimension, boolean>>>({})
+  const [isPivoted, setIsPivoted] = useState(false)
+  const [refreshToken, setRefreshToken] = useState(0)
+  const [lastAction, setLastAction] = useState('Workspace ready')
+  const [mdxPreview, setMdxPreview] = useState('')
+
+  const [draftFilters, setDraftFilters] = useState<Record<string, string[]>>({})
+  const [appliedFilters, setAppliedFilters] = useState<Record<string, string[]>>({})
+  const [optionsByLevel, setOptionsByLevel] = useState<Record<string, SelectOption[]>>({})
+  const [isFilterLoading, setIsFilterLoading] = useState(false)
+  const [filterError, setFilterError] = useState<string | null>(null)
+
+  const [table, setTable] = useState<DisplayTable>(EMPTY_TABLE)
+  const [pivotData, setPivotData] = useState<PivotRenderData | null>(null)
+  const [isQueryLoading, setIsQueryLoading] = useState(false)
+  const [queryError, setQueryError] = useState<string | null>(null)
+
   const {
-    metadata: olapMetadata,
+    metadata,
     isLoading: isMetadataLoading,
     error: metadataError,
   } = useOlapMetadata()
 
-  const measureMetadataMap = useMemo(() => {
-    const map: Record<string, OlapMeasureMetadata> = {}
-    olapMetadata.measures.forEach((measure) => {
-      map[measure.key.trim().toLowerCase()] = measure
-    })
-    return map
-  }, [olapMetadata.measures])
+  const cubeOptions = useMemo<CubeOption[]>(() => {
+    const groups = new Map<string, CubeOption>()
 
-  const measureOptions = useMemo(
-    () => olapMetadata.measures.map((measure) => ({ label: measure.label, value: measure.key })),
-    [olapMetadata.measures],
-  )
-
-  const olapInput = useMemo(
-    () => ({
-      topRows,
-      topColumns,
-      filters,
-      filterLevels,
-      measureMetadataMap,
-      thirdDimension: dimensionCount >= 3 ? thirdDimension : null,
-      thirdLevelIndex: dimensionCount >= 3 && thirdDimension ? filterLevels[thirdDimension] : undefined,
-      enabled: dimensionCount >= 2,
-    }),
-    [dimensionCount, filterLevels, filters, measureMetadataMap, thirdDimension, topColumns, topRows],
-  )
-
-  const {
-    query,
-    result,
-    lastAction,
-    isLoading,
-    error,
-    availableDimensions,
-    rowLevelOptions,
-    columnLevelOptions,
-    canRowDrillDown,
-    canRowRollUp,
-    canColumnDrillDown,
-    canColumnRollUp,
-    drillDownRow,
-    rollUpRow,
-    drillDownColumn,
-    rollUpColumn,
-    pivot,
-    updateQuery,
-  } = useOlap(olapInput)
-
-  const selectedMeasureMetadata = useMemo(
-    () => measureMetadataMap[query.measure.trim().toLowerCase()] ?? null,
-    [measureMetadataMap, query.measure],
-  )
-
-  const levelOptionsByDimension = useMemo(
-    () => toLevelOptionsMap(selectedMeasureMetadata),
-    [selectedMeasureMetadata],
-  )
-
-  const dimensionOptions = useMemo(
-    () =>
-      (selectedMeasureMetadata?.dimensions ?? [])
-        .filter((dimension) => availableDimensions.includes(dimension.key))
-        .map((dimension) => ({ label: dimension.label, value: dimension.key })),
-    [availableDimensions, selectedMeasureMetadata],
-  )
-
-  const maxDimensionCount = Math.min(MAX_DIMENSION_COUNT, availableDimensions.length)
-  const dimensionCountOptions = useMemo(
-    () => Array.from({ length: maxDimensionCount + 1 }, (_, index) => index),
-    [maxDimensionCount],
-  )
-
-  const dimensionLabelMap = useMemo(() => {
-    const next: Record<string, string> = {}
-    dimensionOptions.forEach((option) => {
-      next[option.value] = option.label
-    })
-    return next
-  }, [dimensionOptions])
-
-  const dimensionDisplayLabel = (dimension: OlapDimension): string =>
-    dimensionLabelMap[dimension] ?? DIMENSION_LABELS[dimension]
-
-  useEffect(() => {
-    setDimensionCount((prev) => clampDimensionCount(prev, maxDimensionCount))
-  }, [maxDimensionCount])
-
-  useEffect(() => {
-    const fallback = availableDimensions.find(
-      (dimension) => dimension !== query.rowDimension && dimension !== query.columnDimension,
-    ) ?? null
-
-    setThirdDimension((prev) => {
-      if (fallback === null) {
-        return null
+    metadata.measures.forEach((measure) => {
+      const existing = groups.get(measure.cubeName)
+      if (existing) {
+        existing.measures.push(measure)
+        return
       }
 
-      if (!prev) {
-        return fallback
-      }
-
-      if (
-        !availableDimensions.includes(prev)
-        || prev === query.rowDimension
-        || prev === query.columnDimension
-      ) {
-        return fallback
-      }
-
-      return prev
-    })
-  }, [availableDimensions, query.columnDimension, query.rowDimension])
-
-  const selectedFilterDimensions = useMemo(
-    () => {
-      const next: OlapDimension[] = []
-      if (dimensionCount >= 1) {
-        next.push(query.rowDimension)
-      }
-
-      if (dimensionCount >= 2) {
-        next.push(query.columnDimension)
-      }
-
-      if (dimensionCount >= 3 && thirdDimension) {
-        next.push(thirdDimension)
-      }
-
-      return [...new Set(next)] as OlapDimension[]
-    },
-    [dimensionCount, query.columnDimension, query.rowDimension, thirdDimension],
-  )
-
-  const effectiveFilterLevels = useMemo(() => {
-    const next: Record<OlapDimension, number> = {
-      ...filterLevels,
-    }
-    next[query.rowDimension] = query.rowLevelIndex
-    next[query.columnDimension] = query.columnLevelIndex
-    return next
-  }, [
-    filterLevels,
-    query.columnDimension,
-    query.columnLevelIndex,
-    query.rowDimension,
-    query.rowLevelIndex,
-  ])
-
-  const {
-    options: cubeOptions,
-    isLoading: isFilterLoading,
-    error: filterError,
-  } = useOlapFilterOptions({
-    measureMetadata: selectedMeasureMetadata,
-    dimensions: selectedFilterDimensions,
-    levels: effectiveFilterLevels,
-  })
-
-  useEffect(() => {
-    setFilters((prev) => {
-      let changed = false
-      const next: FilterState = {
-        ...EMPTY_FILTERS,
-        ...prev,
-      }
-
-      selectedFilterDimensions.forEach((key) => {
-        const options = cubeOptions[key]
-        const allowed = new Set(options.map((option) => option.value))
-        const normalized = prev[key].filter((item) => allowed.has(item))
-        if (!sameStringArray(prev[key], normalized)) {
-          next[key] = normalized
-          changed = true
-        }
+      groups.set(measure.cubeName, {
+        value: measure.cubeName,
+        label: formatCubeLabel(measure.cubeType, measure.cubeName),
+        measures: [measure],
       })
-
-      ALL_DIMENSIONS
-        .filter((dimension) => !selectedFilterDimensions.includes(dimension))
-        .forEach((key) => {
-          if (next[key].length > 0) {
-            next[key] = []
-            changed = true
-          }
-        })
-
-      return changed ? next : prev
     })
-  }, [
-    selectedFilterDimensions,
-    cubeOptions.customer,
-    cubeOptions.product,
-    cubeOptions.store,
-    cubeOptions.time,
-  ])
 
-  const activeFilterCount = useMemo(
-    () =>
-      selectedFilterDimensions.reduce((count, key) => {
-        if (filters[key].length > 0) {
-          return count + 1
-        }
+    return Array.from(groups.values())
+  }, [metadata.measures])
 
-        return count
-      }, 0),
-    [selectedFilterDimensions, filters],
-  )
-
-  const selectableRowDimensions = useMemo(() => {
-    const blocked = new Set<OlapDimension>()
-    if (dimensionCount >= 2) {
-      blocked.add(query.columnDimension)
-    }
-    if (dimensionCount >= 3 && thirdDimension) {
-      blocked.add(thirdDimension)
-    }
-
-    return availableDimensions.filter(
-      (dimension) => dimension === query.rowDimension || !blocked.has(dimension),
-    )
-  }, [availableDimensions, dimensionCount, query.columnDimension, query.rowDimension, thirdDimension])
-
-  const selectableColumnDimensions = useMemo(() => {
-    const blocked = new Set<OlapDimension>([query.rowDimension])
-    if (dimensionCount >= 3 && thirdDimension) {
-      blocked.add(thirdDimension)
-    }
-
-    return availableDimensions.filter(
-      (dimension) => dimension === query.columnDimension || !blocked.has(dimension),
-    )
-  }, [availableDimensions, dimensionCount, query.columnDimension, query.rowDimension, thirdDimension])
-
-  const selectableThirdDimensions = useMemo(() => {
-    return availableDimensions.filter(
-      (dimension) =>
-        dimension === thirdDimension
-        || (dimension !== query.rowDimension && dimension !== query.columnDimension),
-    )
-  }, [availableDimensions, query.columnDimension, query.rowDimension, thirdDimension])
-
-  const updateFilterMembers = (key: OlapDimension, values: string[]) => {
-    setFilters((prev) => ({ ...prev, [key]: values }))
-  }
-
-  const updateFilterLevel = (dimension: OlapDimension, nextLevel: number) => {
-    if (dimension === query.rowDimension || dimension === query.columnDimension) {
+  useEffect(() => {
+    if (cubeOptions.length === 0) {
       return
     }
 
-    setFilterLevels((prev) => ({
-      ...prev,
-      [dimension]: nextLevel,
-    }))
-    setFilters((prev) => ({
-      ...prev,
-      [dimension]: [],
-    }))
-  }
+    if (!selectedCubeName || !cubeOptions.some((cube) => cube.value === selectedCubeName)) {
+      const firstCube = cubeOptions[0]
+      setSelectedCubeName(firstCube.value)
+      setSelectedMeasureKey(firstCube.measures[0]?.key ?? '')
+    }
+  }, [cubeOptions, selectedCubeName])
 
-  const resetWorkspace = () => {
-    setFilters(EMPTY_FILTERS)
-    setFilterLevels(DEFAULT_FILTER_LEVELS)
-    setTopRows(DEFAULT_TOP_ROWS)
-    setTopColumns(DEFAULT_TOP_COLUMNS)
-    setDimensionCount(2)
-    setThirdDimension('product')
-    updateQuery({
-      measure: 'inventory',
-      rowDimension: 'store',
-      columnDimension: 'time',
-      rowLevelIndex: 2,
-      columnLevelIndex: 1,
-    })
-  }
+  const selectedCube = useMemo(
+    () => cubeOptions.find((cube) => cube.value === selectedCubeName) ?? null,
+    [cubeOptions, selectedCubeName],
+  )
 
-  const updateDimensionCountValue = (rawValue: string) => {
-    const next = safeInt(rawValue, 2, 0, MAX_DIMENSION_COUNT)
-    setDimensionCount(clampDimensionCount(next, maxDimensionCount))
-  }
-
-  const updateRowDimension = (nextRowDimension: OlapDimension) => {
-    let nextColumnDimension = query.columnDimension
-    if (dimensionCount >= 2 && nextColumnDimension === nextRowDimension) {
-      nextColumnDimension = availableDimensions.find(
-        (dimension) => dimension !== nextRowDimension && (dimensionCount < 3 || dimension !== thirdDimension),
-      ) ?? nextColumnDimension
+  useEffect(() => {
+    if (!selectedCube || selectedCube.measures.length === 0) {
+      return
     }
 
-    updateQuery({
-      rowDimension: nextRowDimension,
-      columnDimension: nextColumnDimension,
-    })
-  }
+    if (!selectedCube.measures.some((measure) => measure.key === selectedMeasureKey)) {
+      setSelectedMeasureKey(selectedCube.measures[0].key)
+    }
+  }, [selectedCube, selectedMeasureKey])
 
-  const updateColumnDimension = (nextColumnDimension: OlapDimension) => {
-    let finalColumnDimension = nextColumnDimension
-    if (finalColumnDimension === query.rowDimension) {
-      finalColumnDimension = availableDimensions.find(
-        (dimension) => dimension !== query.rowDimension && (dimensionCount < 3 || dimension !== thirdDimension),
-      ) ?? finalColumnDimension
+  const selectedMeasure = useMemo(
+    () => selectedCube?.measures.find((measure) => measure.key === selectedMeasureKey) ?? null,
+    [selectedCube, selectedMeasureKey],
+  )
+
+  const dimensionsForMeasure = selectedMeasure?.dimensions ?? []
+
+  useEffect(() => {
+    if (!selectedMeasure) {
+      setSelectedLevels([])
+      return
     }
 
-    updateQuery({
-      columnDimension: finalColumnDimension,
+    const allowedDimensions = new Set(dimensionsForMeasure.map((dimension) => dimension.key))
+    setSelectedLevels((previous) => previous.filter((level) => allowedDimensions.has(level.dimension)))
+  }, [dimensionsForMeasure, selectedMeasure])
+
+  useEffect(() => {
+    setExpandedDimensions((previous) => {
+      const next = { ...previous }
+      dimensionsForMeasure.forEach((dimension) => {
+        if (typeof next[dimension.key] === 'undefined') {
+          next[dimension.key] = false
+        }
+      })
+      return next
     })
+  }, [dimensionsForMeasure])
+
+  useEffect(() => {
+    setDraftFilters((previous) => {
+      const next: Record<string, string[]> = {}
+      selectedLevels.forEach((level) => {
+        next[level.id] = previous[level.id] ?? []
+      })
+      return next
+    })
+
+    setAppliedFilters((previous) => {
+      const next: Record<string, string[]> = {}
+      selectedLevels.forEach((level) => {
+        next[level.id] = previous[level.id] ?? []
+      })
+      return next
+    })
+  }, [selectedLevels])
+
+  useEffect(() => {
+    let isActive = true
+
+    const run = async () => {
+      if (!selectedMeasure || selectedLevels.length === 0) {
+        setOptionsByLevel({})
+        setFilterError(null)
+        setIsFilterLoading(false)
+        return
+      }
+
+      setIsFilterLoading(true)
+      setFilterError(null)
+
+      try {
+        const responses = await Promise.all(
+          selectedLevels.map(async (level) => {
+            const result = await executeOlapQuery(
+              selectedMeasure.cubeName,
+              membersQuery(selectedMeasure.cubeName, level.levelExpression, 260),
+            )
+
+            return {
+              level,
+              options: toMemberOptions(result, level),
+            }
+          }),
+        )
+
+        if (!isActive) {
+          return
+        }
+
+        const nextOptions: Record<string, SelectOption[]> = {}
+        responses.forEach((item) => {
+          nextOptions[item.level.id] = item.options
+        })
+
+        setOptionsByLevel(nextOptions)
+        setDraftFilters((previous) => normalizeFilterMap(previous, selectedLevels, nextOptions))
+        setAppliedFilters((previous) => normalizeFilterMap(previous, selectedLevels, nextOptions))
+      } catch (error) {
+        if (!isActive) {
+          return
+        }
+
+        const message = error instanceof Error ? error.message : 'Khong the tai members cho bo loc.'
+        setFilterError(message)
+        setOptionsByLevel({})
+      } finally {
+        if (isActive) {
+          setIsFilterLoading(false)
+        }
+      }
+    }
+
+    void run()
+
+    return () => {
+      isActive = false
+    }
+  }, [selectedLevels, selectedMeasure, refreshToken])
+
+  useEffect(() => {
+    let isActive = true
+
+    const run = async () => {
+      if (!selectedMeasure) {
+        setTable(EMPTY_TABLE)
+        setPivotData(null)
+        setQueryError(null)
+        setIsQueryLoading(false)
+        return
+      }
+
+      setIsQueryLoading(true)
+      setQueryError(null)
+
+      try {
+        const mdx = buildExplorerMdx(
+          selectedMeasure.measureExpression,
+          selectedMeasure.cubeName,
+          selectedLevels,
+          appliedFilters,
+        )
+
+        setMdxPreview(mdx)
+        const queryResult = await executeOlapQuery(selectedMeasure.cubeName, mdx)
+
+        if (!isActive) {
+          return
+        }
+
+        const normalized = normalizeFlatTable(queryResult, selectedLevels, selectedMeasure.label)
+        setTable(normalized)
+        setPivotData(
+          selectedLevels.length > 0
+            ? toPivotRenderData(normalized, selectedLevels, selectedMeasure.label)
+            : null,
+        )
+      } catch (error) {
+        if (!isActive) {
+          return
+        }
+
+        const message = error instanceof Error ? error.message : 'Khong the lay du lieu tu cube.'
+        setQueryError(message)
+        setTable(EMPTY_TABLE)
+        setPivotData(null)
+      } finally {
+        if (isActive) {
+          setIsQueryLoading(false)
+        }
+      }
+    }
+
+    void run()
+
+    return () => {
+      isActive = false
+    }
+  }, [appliedFilters, refreshToken, selectedLevels, selectedMeasure])
+
+  const selectedLevelIds = useMemo(
+    () => new Set(selectedLevels.map((level) => level.id)),
+    [selectedLevels],
+  )
+
+  const breadcrumb = useMemo(() => {
+    if (!selectedMeasure) {
+      return 'Chua co measure.'
+    }
+
+    if (selectedLevels.length === 0) {
+      return `0D | Measure: ${selectedMeasure.label}`
+    }
+
+    const levelPath = selectedLevels
+      .map((level) => `${level.dimensionLabel}.${level.levelLabel}`)
+      .join(' > ')
+
+    return `${isPivoted ? 'Pivot mode' : 'Tabular mode'} | ${levelPath}`
+  }, [isPivoted, selectedLevels, selectedMeasure])
+
+  const appliedFilterTotal = useMemo(
+    () => activeFilterCount(selectedLevels, appliedFilters),
+    [appliedFilters, selectedLevels],
+  )
+
+  const handleCubeChange = (nextCubeName: string) => {
+    const nextCube = cubeOptions.find((cube) => cube.value === nextCubeName)
+    if (!nextCube || nextCube.measures.length === 0) {
+      return
+    }
+
+    setSelectedCubeName(nextCubeName)
+    setSelectedMeasureKey(nextCube.measures[0].key)
+    setSelectedLevels([])
+    setExpandedDimensions({})
+    setDraftFilters({})
+    setAppliedFilters({})
+    setOptionsByLevel({})
+    setIsPivoted(false)
+    setLastAction(`Da chuyen cube: ${nextCubeName}`)
+  }
+
+  const handleMeasureChange = (nextMeasure: string) => {
+    setSelectedMeasureKey(nextMeasure)
+    setSelectedLevels([])
+    setExpandedDimensions({})
+    setDraftFilters({})
+    setAppliedFilters({})
+    setOptionsByLevel({})
+    setIsPivoted(false)
+    setLastAction('Da doi measure.')
+  }
+
+  const handleDropLevel = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+
+    if (event.dataTransfer.types.includes(SELECTED_LEVEL_DRAG_MIME)) {
+      return
+    }
+
+    const rawPayload = event.dataTransfer.getData(LEVEL_DRAG_MIME)
+      || event.dataTransfer.getData('text/plain')
+    const payload = safeParseLevelPayload(rawPayload)
+    if (!payload) {
+      return
+    }
+
+    const nextLevel: SelectedLevel = {
+      id: buildLevelId(payload.dimension, payload.levelKey),
+      dimension: payload.dimension,
+      dimensionLabel: payload.dimensionLabel,
+      levelKey: payload.levelKey,
+      levelLabel: payload.levelLabel,
+      levelIndex: payload.levelIndex,
+      levelExpression: payload.levelExpression,
+    }
+
+    if (selectedLevelIds.has(nextLevel.id)) {
+      setLastAction('Level da ton tai trong layout.')
+      return
+    }
+
+    const allowedDimensions = new Set(dimensionsForMeasure.map((dimension) => dimension.key))
+    if (!allowedDimensions.has(nextLevel.dimension)) {
+      setLastAction('Level khong thuoc measure hien tai.')
+      return
+    }
+
+    setSelectedLevels((previous) => [...previous, nextLevel])
+    setLastAction(`Da them level ${nextLevel.dimensionLabel} - ${nextLevel.levelLabel}.`)
+  }
+
+  const reorderSelectedLevels = (draggedId: string, targetId: string) => {
+    if (draggedId === targetId) {
+      return
+    }
+
+    setSelectedLevels((previous) => {
+      const sourceIndex = previous.findIndex((item) => item.id === draggedId)
+      const targetIndex = previous.findIndex((item) => item.id === targetId)
+      if (sourceIndex < 0 || targetIndex < 0) {
+        return previous
+      }
+
+      const next = [...previous]
+      const [item] = next.splice(sourceIndex, 1)
+      next.splice(targetIndex, 0, item)
+      return next
+    })
+    setLastAction('Da sap xep lai thu tu level.')
+  }
+
+  const removeLevel = (levelId: string) => {
+    setSelectedLevels((previous) => previous.filter((level) => level.id !== levelId))
+    setDraftFilters((previous) => {
+      const next = { ...previous }
+      delete next[levelId]
+      return next
+    })
+    setAppliedFilters((previous) => {
+      const next = { ...previous }
+      delete next[levelId]
+      return next
+    })
+    setOptionsByLevel((previous) => {
+      const next = { ...previous }
+      delete next[levelId]
+      return next
+    })
+    setLastAction('Da xoa level khoi layout.')
+  }
+
+  const rollLevel = (levelId: string, direction: -1 | 1) => {
+    const current = selectedLevels.find((item) => item.id === levelId)
+    if (!current) {
+      return
+    }
+
+    const dimension = dimensionsForMeasure.find((item) => item.key === current.dimension)
+    if (!dimension) {
+      return
+    }
+
+    const nextIndex = current.levelIndex + direction
+    if (nextIndex < 0 || nextIndex >= dimension.levels.length) {
+      return
+    }
+
+    const nextLevel = dimension.levels[nextIndex]
+    const nextId = buildLevelId(current.dimension, nextLevel.key)
+    const duplicate = selectedLevels.some((item) => item.id === nextId && item.id !== current.id)
+    if (duplicate) {
+      setLastAction('Level muc tieu da ton tai trong layout.')
+      return
+    }
+
+    setSelectedLevels((previous) =>
+      previous.map((item) => {
+        if (item.id !== levelId) {
+          return item
+        }
+
+        return {
+          ...item,
+          id: nextId,
+          levelKey: nextLevel.key,
+          levelLabel: nextLevel.label,
+          levelIndex: nextIndex,
+          levelExpression: nextLevel.levelExpression,
+        }
+      }),
+    )
+
+    setDraftFilters((previous) => {
+      const next = { ...previous }
+      next[nextId] = next[levelId] ?? []
+      delete next[levelId]
+      return next
+    })
+    setAppliedFilters((previous) => {
+      const next = { ...previous }
+      next[nextId] = next[levelId] ?? []
+      delete next[levelId]
+      return next
+    })
+    setOptionsByLevel((previous) => {
+      const next = { ...previous }
+      delete next[levelId]
+      return next
+    })
+    setLastAction(direction > 0 ? 'Da drill down level.' : 'Da roll up level.')
+  }
+
+  const toggleDimension = (dimension: OlapDimension) => {
+    setExpandedDimensions((previous) => ({
+      ...previous,
+      [dimension]: !(previous[dimension] ?? true),
+    }))
+  }
+
+  const updateDraftFilter = (levelId: string, values: string[]) => {
+    setDraftFilters((previous) => ({
+      ...previous,
+      [levelId]: values,
+    }))
+  }
+
+  const applyFilters = () => {
+    const nextApplied: Record<string, string[]> = {}
+    selectedLevels.forEach((level) => {
+      nextApplied[level.id] = [...(draftFilters[level.id] ?? [])]
+    })
+
+    setAppliedFilters(nextApplied)
+    setLastAction('Da ap dung bo loc.')
+  }
+
+  const clearFilters = () => {
+    const cleared: Record<string, string[]> = {}
+    selectedLevels.forEach((level) => {
+      cleared[level.id] = []
+    })
+
+    setDraftFilters(cleared)
+    setAppliedFilters(cleared)
+    setLastAction('Da xoa bo loc.')
+  }
+
+  const refreshData = () => {
+    setRefreshToken((previous) => previous + 1)
+    setLastAction('Da refresh du lieu tu cube.')
+  }
+
+  const togglePivot = () => {
+    setIsPivoted((previous) => !previous)
+    setLastAction('Da pivot layout.')
+  }
+
+  const resetLayout = () => {
+    setSelectedLevels([])
+    setDraftFilters({})
+    setAppliedFilters({})
+    setOptionsByLevel({})
+    setIsPivoted(false)
+    setLastAction('Da reset layout.')
   }
 
   return (
     <div className="page-stack">
-      <PageHeader
-        title="OLAP Explorer - Quan tri kho linh hoat"
-        description="Truy van da chieu cho quan ly kho: chon measure, xoay truc, drill/roll theo hierarchy va loc nghiep vu tren tung dimension."
-        action={<span className="badge-note">Last action: {lastAction}</span>}
-      />
-
-      <section className="content-card">
-        <div className="card-header">
-          <h3>Workspace truy van</h3>
-          <div className="header-action-row">
-            <span className="badge-note">Active filters: {activeFilterCount}</span>
-            <button className="btn-secondary" type="button" onClick={resetWorkspace}>
-              Reset workspace
-            </button>
-          </div>
-        </div>
-        {isMetadataLoading ? <p className="card-note">Dang dong bo metadata measure/dimension tu cube...</p> : null}
-        {!isMetadataLoading && metadataError ? <p className="card-note">{metadataError}</p> : null}
-
-        <div className="explorer-config-grid">
-          <div className="dimension-control-field">
-            <label htmlFor="dimension-count-input">So chieu du lieu (0-{maxDimensionCount})</label>
+      <section className="content-card olap-sticky-toolbar">
+        <div className="olap-toolbar-grid-singleline">
+          <div className="olap-toolbar-group">
+            <label htmlFor="cube-select">Cube</label>
             <select
-              id="dimension-count-input"
-              className="workspace-control"
-              value={String(dimensionCount)}
-              onChange={(event) => updateDimensionCountValue(event.target.value)}
+              id="cube-select"
+              value={selectedCubeName}
+              disabled={cubeOptions.length === 0}
+              onChange={(event) => handleCubeChange(event.target.value)}
             >
-              {dimensionCountOptions.map((count) => (
-                <option key={count} value={count}>
-                  {count}
+              {cubeOptions.map((cube) => (
+                <option key={cube.value} value={cube.value}>
+                  {cube.label}
                 </option>
               ))}
             </select>
-            <p className="card-note">Nhap so chieu ban muon hien thi trong workspace.</p>
           </div>
 
-          <div className="dimension-control-field">
+          <div className="olap-toolbar-group">
             <label htmlFor="measure-select">Measure</label>
             <select
-              className="workspace-control"
               id="measure-select"
-              value={query.measure}
-              disabled={measureOptions.length === 0}
-              onChange={(event) => updateQuery({ measure: event.target.value })}
+              value={selectedMeasureKey}
+              disabled={!selectedCube || selectedCube.measures.length === 0}
+              onChange={(event) => handleMeasureChange(event.target.value)}
             >
-              {measureOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
+              {(selectedCube?.measures ?? []).map((measure) => (
+                <option key={measure.key} value={measure.key}>
+                  {measure.label}
                 </option>
               ))}
             </select>
           </div>
 
-          <div className="dimension-control-field">
-            <label htmlFor="top-rows-input">Top rows</label>
-            <input
-              id="top-rows-input"
-              className="workspace-control"
-              max={250}
-              min={1}
-              type="number"
-              value={topRows}
-              onChange={(event) => setTopRows(safeInt(event.target.value, DEFAULT_TOP_ROWS, 1, 250))}
-            />
+          <div className="olap-toolbar-actions-row">
+            <button className="btn-secondary" type="button" onClick={refreshData}>
+              Refresh
+            </button>
+            <button className="btn-secondary" type="button" onClick={togglePivot}>
+              Pivot
+            </button>
+            <button className="btn-secondary" type="button" onClick={resetLayout}>
+              Reset layout
+            </button>
           </div>
-
-          <div className="dimension-control-field">
-            <label htmlFor="top-columns-input">Top columns</label>
-            <input
-              id="top-columns-input"
-              className="workspace-control"
-              max={48}
-              min={1}
-              type="number"
-              value={topColumns}
-              onChange={(event) => setTopColumns(safeInt(event.target.value, DEFAULT_TOP_COLUMNS, 1, 48))}
-            />
-          </div>
-
-          {dimensionCount >= 1 ? (
-            <div className="dimension-control-field">
-              <label htmlFor="row-dimension">Chieu 1 - Truc dong (Row Axis)</label>
-              <div className="dimension-control-line">
-                <select
-                  className="workspace-control"
-                  id="row-dimension"
-                  value={query.rowDimension}
-                  onChange={(event) => updateRowDimension(event.target.value as OlapDimension)}
-                >
-                  {selectableRowDimensions.map((dimension) => (
-                    <option key={dimension} value={dimension}>
-                      {dimensionDisplayLabel(dimension)}
-                    </option>
-                  ))}
-                </select>
-                <div className="axis-arrow-controls">
-                  <button
-                    className="btn-secondary axis-arrow-button"
-                    disabled={!canRowRollUp}
-                    onClick={rollUpRow}
-                    title="Roll up row axis"
-                    type="button"
-                  >
-                    {'\u2191'}
-                  </button>
-                  <button
-                    className="btn-secondary axis-arrow-button"
-                    disabled={!canRowDrillDown}
-                    onClick={drillDownRow}
-                    title="Drill down row axis"
-                    type="button"
-                  >
-                    {'\u2193'}
-                  </button>
-                </div>
-              </div>
-              <p className="card-note">Level hien tai: {rowLevelOptions[query.rowLevelIndex]?.label ?? '-'}</p>
-            </div>
-          ) : null}
-
-          {dimensionCount >= 2 ? (
-            <div className="dimension-control-field">
-              <label htmlFor="column-dimension">Chieu 2 - Truc cot (Column Axis)</label>
-              <div className="dimension-control-line">
-                <select
-                  className="workspace-control"
-                  id="column-dimension"
-                  value={query.columnDimension}
-                  onChange={(event) => updateColumnDimension(event.target.value as OlapDimension)}
-                >
-                  {selectableColumnDimensions.map((dimension) => (
-                    <option key={dimension} value={dimension}>
-                      {dimensionDisplayLabel(dimension)}
-                    </option>
-                  ))}
-                </select>
-                <div className="axis-arrow-controls">
-                  <button
-                    className="btn-secondary axis-arrow-button"
-                    disabled={!canColumnRollUp}
-                    onClick={rollUpColumn}
-                    title="Roll up column axis"
-                    type="button"
-                  >
-                    {'\u2191'}
-                  </button>
-                  <button
-                    className="btn-secondary axis-arrow-button"
-                    disabled={!canColumnDrillDown}
-                    onClick={drillDownColumn}
-                    title="Drill down column axis"
-                    type="button"
-                  >
-                    {'\u2193'}
-                  </button>
-                </div>
-              </div>
-              <p className="card-note">Level hien tai: {columnLevelOptions[query.columnLevelIndex]?.label ?? '-'}</p>
-            </div>
-          ) : null}
-
-          {dimensionCount >= 3 && thirdDimension ? (
-            <div className="dimension-control-field">
-              <label htmlFor="slicer-dimension">Chieu 3 - Slicer</label>
-              <select
-                className="workspace-control"
-                id="slicer-dimension"
-                value={thirdDimension}
-                onChange={(event) => setThirdDimension(event.target.value as OlapDimension)}
-              >
-                {selectableThirdDimensions.map((dimension) => (
-                  <option key={dimension} value={dimension}>
-                    {dimensionDisplayLabel(dimension)}
-                  </option>
-                ))}
-              </select>
-              <p className="card-note">Chieu bo sung duoc dung de loc nghiep vu (slice/dice).</p>
-            </div>
-          ) : null}
         </div>
 
-        <div className="action-row">
-          {dimensionCount >= 2 ? (
-            <button className="btn-secondary" type="button" onClick={pivot}>
-              Pivot Axis
-            </button>
-          ) : (
-            <p className="card-note">Can chon it nhat 2 chieu de truy van pivot.</p>
-          )}
+        <div className="olap-toolbar-meta-line">
+          <p className="olap-breadcrumb-value">{breadcrumb}</p>
+          <span className="badge-note">Active filters: {appliedFilterTotal}</span>
+          <span className="badge-note">Rows: {table.rows.length}</span>
+          <span className="badge-note">Total: {formatNumber(table.total)}</span>
+        </div>
+
+        <div className="olap-toolbar-meta-line">
+          <p className="card-note">Last action: {lastAction}</p>
+          {isMetadataLoading ? <p className="card-note">Dang tai metadata tu cube...</p> : null}
+          {!isMetadataLoading && metadataError ? <p className="card-note">{metadataError}</p> : null}
         </div>
       </section>
 
-      <section className="content-card">
-        <h3>Bo loc nghiep vu</h3>
-        {selectedFilterDimensions.length > 0 ? (
-          <div className="filters-grid">
-            {selectedFilterDimensions.map((dimension) => {
-              const isAxisDimension = dimension === query.rowDimension || dimension === query.columnDimension
-              const levelIndex = effectiveFilterLevels[dimension]
+      <div className="olap-browser-shell-v2">
+        <div className="olap-browser-main-v2">
+          <section className="content-card">
+            <div className="card-header">
+              <h3>Workspace layout</h3>
+            </div>
 
-              return (
-                <div className="filter-field" key={dimension}>
-                  <label htmlFor={`olap-filter-level-${dimension}`}>
-                    {dimensionDisplayLabel(dimension)} - {levelOptionsByDimension[dimension][levelIndex]?.label ?? '-'}
-                  </label>
-
-                  {!isAxisDimension ? (
-                    <select
-                      id={`olap-filter-level-${dimension}`}
-                      value={String(filterLevels[dimension])}
-                      onChange={(event) => updateFilterLevel(dimension, Number(event.target.value))}
+            <div
+              className="level-drop-zone"
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={handleDropLevel}
+            >
+              {selectedLevels.length === 0 ? (
+                <p className="card-note">
+                  Keo level tu Dimension Tree vao day. Neu khong chon level nao, bang se hien tong measure (0 chieu).
+                </p>
+              ) : (
+                <ul className="selected-level-list">
+                  {selectedLevels.map((level, index) => (
+                    <li
+                      className="selected-level-item"
+                      draggable
+                      key={level.id}
+                      onDragOver={(event) => event.preventDefault()}
+                      onDragStart={(event) => {
+                        event.dataTransfer.effectAllowed = 'move'
+                        event.dataTransfer.setData(SELECTED_LEVEL_DRAG_MIME, level.id)
+                        event.dataTransfer.setData('text/plain', level.id)
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault()
+                        const draggedId = event.dataTransfer.getData(SELECTED_LEVEL_DRAG_MIME)
+                          || event.dataTransfer.getData('text/plain')
+                        if (!draggedId) {
+                          return
+                        }
+                        reorderSelectedLevels(draggedId, level.id)
+                      }}
                     >
-                      {levelOptionsByDimension[dimension].map((option, index) => (
-                        <option key={`${dimension}-${option.label}`} value={index}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <p className="card-note">Level nay dang dong bo theo truc Row/Column.</p>
-                  )}
+                      <div className="selected-level-label">
+                        <span className="level-drag-handle">::</span>
+                        <span className="dimension-level-role">{index + 1}</span>
+                        <span>{level.dimensionLabel} - {level.levelLabel}</span>
+                      </div>
+                      <div className="selected-level-actions">
+                        <button
+                          className="btn-secondary axis-mini-btn"
+                          disabled={level.levelIndex <= 0}
+                          onClick={() => rollLevel(level.id, -1)}
+                          type="button"
+                          title="Roll up"
+                        >
+                          {'\u2191'}
+                        </button>
+                        <button
+                          className="btn-secondary axis-mini-btn"
+                          disabled={
+                            level.levelIndex >= (
+                              dimensionsForMeasure.find((item) => item.key === level.dimension)?.levels.length ?? 1
+                            ) - 1
+                          }
+                          onClick={() => rollLevel(level.id, 1)}
+                          type="button"
+                          title="Drill down"
+                        >
+                          {'\u2193'}
+                        </button>
+                        <button
+                          className="btn-secondary axis-mini-btn"
+                          onClick={() => removeLevel(level.id)}
+                          type="button"
+                          title="Remove"
+                        >
+                          {'\u2715'}
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
 
-                  <MultiSelectFilter
-                    embedded
-                    id={`olap-filter-members-${dimension}`}
-                    label="Select members (click de chon nhieu)"
-                    onChange={(next) => updateFilterMembers(dimension, next)}
-                    options={cubeOptions[dimension]}
-                    value={filters[dimension]}
-                  />
-                </div>
+            <p className="card-note">
+              Tabular mode: level tren cot, ban ghi tren dong. Pivot mode: xoay level sang truc cot de so sanh nhanh.
+            </p>
+          </section>
+
+          <section className="content-card">
+            <div className="card-header">
+              <h3>Bo loc nghiep vu</h3>
+            </div>
+
+            {selectedLevels.length > 0 ? (
+              <div className="filters-grid">
+                {selectedLevels.map((level) => (
+                  <div className="filter-field" key={level.id}>
+                    <label htmlFor={`filter-${level.id}`}>
+                      {level.dimensionLabel} - {level.levelLabel}
+                    </label>
+                    <MultiSelectFilter
+                      embedded
+                      id={`filter-${level.id}`}
+                      label="Select members"
+                      options={optionsByLevel[level.id] ?? []}
+                      value={draftFilters[level.id] ?? []}
+                      onChange={(next) => updateDraftFilter(level.id, next)}
+                    />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="card-note">Them level vao workspace de bat dau loc du lieu.</p>
+            )}
+
+            <div className="action-row">
+              <button className="btn-secondary" type="button" onClick={applyFilters}>
+                Apply filter
+              </button>
+              <button className="btn-secondary" type="button" onClick={clearFilters}>
+                Clear filter
+              </button>
+            </div>
+
+            {isFilterLoading ? <p className="card-note">Dang tai members...</p> : null}
+            {!isFilterLoading && filterError ? <p className="card-note">{filterError}</p> : null}
+          </section>
+
+          <section className="content-card">
+            <div className="card-header">
+              <h3>Bang ket qua OLAP</h3>
+              <span className="badge-note">{isPivoted ? 'Pivot mode' : 'Tabular mode'}</span>
+            </div>
+
+            {isQueryLoading ? <Loading /> : null}
+            {!isQueryLoading && queryError ? <ErrorState message={queryError} /> : null}
+
+            {!isQueryLoading && !queryError ? (
+              <>
+                {isPivoted && pivotData && pivotData.measureValues.length > 0 ? (
+                  <div className="table-wrap">
+                    <table className="data-table pivot-grid-table">
+                      <thead>
+                        {pivotData.levelRows.map((row, rowIndex) => (
+                          <tr key={`pivot-row-${rowIndex}`}>
+                            <th className="align-center pivot-row-label">{row.label}</th>
+                            {row.values.map((value, colIndex) => (
+                              <th className="align-center" key={`pivot-head-${rowIndex}-${colIndex}`}>
+                                {value}
+                              </th>
+                            ))}
+                          </tr>
+                        ))}
+                      </thead>
+                      <tbody>
+                        <tr>
+                          <td className="align-center pivot-measure-label">{pivotData.measureLabel}</td>
+                          {pivotData.measureValues.map((value, colIndex) => (
+                            <td className="align-center" key={`pivot-value-${colIndex}`}>
+                              {value}
+                            </td>
+                          ))}
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                ) : table.columns.length > 0 ? (
+                  <DataTable columns={table.columns} rows={table.rows} />
+                ) : (
+                  <p className="card-note">Khong co du lieu de hien thi.</p>
+                )}
+
+                <details className="olap-mdx-preview">
+                  <summary>MDX generated</summary>
+                  <pre>{mdxPreview}</pre>
+                </details>
+              </>
+            ) : null}
+          </section>
+        </div>
+
+        <aside className="content-card dimension-tree-panel">
+          <div className="card-header">
+            <h3>Dimension Tree</h3>
+          </div>
+
+          <p className="card-note">
+            Expand dimension, keo level vao Workspace layout. Co the keo nhieu level cua cung mot dimension.
+          </p>
+
+          <div className="dimension-tree-list">
+            {dimensionsForMeasure.map((dimension) => {
+              const isExpanded = expandedDimensions[dimension.key] ?? true
+              return (
+                <section className="dimension-tree-node" key={dimension.key}>
+                  <button
+                    className="dimension-tree-toggle"
+                    type="button"
+                    aria-expanded={isExpanded}
+                    onClick={() => toggleDimension(dimension.key)}
+                  >
+                    <span className="tree-toggle-icon">{isExpanded ? '-' : '+'}</span>
+                    <span className="dimension-node-label">{dimension.label}</span>
+                  </button>
+
+                  {isExpanded ? (
+                    <ul className="dimension-tree-levels">
+                      {dimension.levels.map((level) => {
+                        const levelId = buildLevelId(dimension.key, level.key)
+                        const placed = selectedLevelIds.has(levelId)
+                        const payload: LevelDragPayload = {
+                          dimension: dimension.key,
+                          dimensionLabel: dimension.label,
+                          levelKey: level.key,
+                          levelLabel: level.label,
+                          levelIndex: dimension.levels.findIndex((item) => item.key === level.key),
+                          levelExpression: level.levelExpression,
+                        }
+
+                        return (
+                          <li className="dimension-tree-level-item" key={levelId}>
+                            <button
+                              className={`dimension-level-drag ${placed ? 'is-selected' : ''}`}
+                              draggable
+                              onDragStart={(event) => {
+                                const serialized = JSON.stringify(payload)
+                                event.dataTransfer.effectAllowed = 'move'
+                                event.dataTransfer.setData(LEVEL_DRAG_MIME, serialized)
+                                event.dataTransfer.setData('text/plain', serialized)
+                              }}
+                              type="button"
+                            >
+                              <span className="tree-level-icon">+</span>
+                              <span>{level.label}</span>
+                            </button>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  ) : null}
+                </section>
               )
             })}
           </div>
-        ) : (
-          <p className="card-note">Chon so chieu lon hon 0 de hien thi bo loc.</p>
-        )}
-        {isFilterLoading ? <p className="card-note">Dang tai members tu cube...</p> : null}
-        {!isFilterLoading && filterError ? <p className="card-note">{filterError}</p> : null}
-      </section>
-
-      {isLoading ? <Loading /> : null}
-      {!isLoading && error ? <ErrorState message={error} /> : null}
-
-      {dimensionCount < 2 ? (
-        <section className="content-card">
-          <p className="card-note">Ket qua pivot chi hien thi khi ban chon tu 2 den 3 chieu du lieu.</p>
-        </section>
-      ) : null}
-
-      {dimensionCount >= 2 && !isLoading && !error ? (
-        <section className="content-card">
-          <div className="card-header">
-            <h3>Ket qua pivot tu API</h3>
-            <span className="badge-note">Total: {formatNumber(result.total)}</span>
-          </div>
-          <PivotTable
-            rowHeader={result.rowHeader}
-            secondaryRowHeader={result.secondaryRowHeader}
-            columnHeaders={result.columnHeaders}
-            rows={result.rows}
-          />
-          <p className="card-note">
-            Cot hien tai: {result.columnHeader}. Row level: {result.rowLevelLabel}. Column level:{' '}
-            {result.columnLevelLabel}.
-          </p>
-        </section>
-      ) : null}
+        </aside>
+      </div>
     </div>
   )
 }

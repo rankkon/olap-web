@@ -21,6 +21,7 @@ export interface OlapMeasureMetadata {
   label: string
   cubeType: string
   cubeName: string
+  measureExpression: string
   dimensions: OlapDimensionMetadata[]
 }
 

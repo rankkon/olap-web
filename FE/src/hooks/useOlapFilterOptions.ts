@@ -14,6 +14,7 @@ interface UseOlapFilterOptionsInput {
   measureMetadata?: OlapMeasureMetadata | null
   dimensions: OlapDimension[]
   levels: Record<OlapDimension, number>
+  reloadToken?: number
 }
 
 type FilterKey = keyof OlapFilterOptions
@@ -254,7 +255,7 @@ export function useOlapFilterOptions(input: UseOlapFilterOptionsInput) {
     return () => {
       isActive = false
     }
-  }, [input.dimensions, input.levels, input.measureMetadata])
+  }, [input.dimensions, input.levels, input.measureMetadata, input.reloadToken])
 
   return {
     options,

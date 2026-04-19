@@ -15,6 +15,8 @@ public sealed class OlapMeasureMetadata
 
     public string CubeName { get; set; } = string.Empty;
 
+    public string MeasureExpression { get; set; } = string.Empty;
+
     public IReadOnlyList<OlapDimensionMetadata> Dimensions { get; set; } = Array.Empty<OlapDimensionMetadata>();
 }
 

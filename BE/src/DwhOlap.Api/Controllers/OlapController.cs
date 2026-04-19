@@ -382,6 +382,7 @@ WHERE ( {string.Join(", ", whereItems)} )";
                     Label = "Revenue",
                     CubeType = "banhang",
                     CubeName = options.CubeBanHang,
+                    MeasureExpression = $"[Measures].[{EscapeMdxName(options.MeasureTongDoanhThu)}]",
                     Dimensions = BuildDimensionMetadata(BanHangDimensions, BanHangDimensionOrder)
                 },
                 new OlapMeasureMetadata
@@ -390,6 +391,7 @@ WHERE ( {string.Join(", ", whereItems)} )";
                     Label = "Order Count",
                     CubeType = "banhang",
                     CubeName = options.CubeBanHang,
+                    MeasureExpression = "[Measures].[So Luong Hang]",
                     Dimensions = BuildDimensionMetadata(BanHangDimensions, BanHangDimensionOrder)
                 },
                 new OlapMeasureMetadata
@@ -398,6 +400,7 @@ WHERE ( {string.Join(", ", whereItems)} )";
                     Label = "Inventory",
                     CubeType = "tonkho",
                     CubeName = options.CubeTonKho,
+                    MeasureExpression = $"[Measures].[{EscapeMdxName(options.MeasureSoLuongTonKho)}]",
                     Dimensions = BuildDimensionMetadata(TonKhoDimensions, TonKhoDimensionOrder)
                 }
             }
