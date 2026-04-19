@@ -77,16 +77,16 @@ function buildKpis(series: ChartPoint[]): KpiMetric[] {
 
   return [
     {
-      label: 'Tong gia tri',
+      label: 'Tổng giá trị',
       value: formatNumber(total),
-      trend: `${series.length} diem du lieu`,
+      trend: `${series.length} điểm dữ liệu`,
     },
     {
-      label: 'Gia tri trung binh',
+      label: 'Giá trị trung bình',
       value: formatNumber(average),
     },
     {
-      label: 'Gia tri lon nhat',
+      label: 'Giá trị lớn nhất',
       value: formatNumber(maxPoint.value),
       trend: maxPoint.label,
     },
@@ -120,7 +120,7 @@ export function mapReportResponseToReportData(reportId: number, source: ReportRe
   return {
     id: reportId,
     title: source.title,
-    description: `Du lieu tu cube ${source.cube}`,
+    description: `Dữ liệu từ cube ${source.cube}`,
     kpis,
     barSeries: chartSeries.barSeries,
     lineSeries: chartSeries.lineSeries,

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 using DwhOlap.Api.Models;
 using DwhOlap.Api.Options;
@@ -14,38 +15,38 @@ public sealed class OlapController : ControllerBase
 {
     private static readonly IReadOnlyList<AxisLevel> TimeLevels = new[]
     {
-        new AxisLevel("year", "Nam", "[Dim Thoi Gian].[Nam].[Nam]", "h_time", "H_ThoiGian", 0),
-        new AxisLevel("quarter", "Quy", "[Dim Thoi Gian].[Quy].[Quy]", "h_time", "H_ThoiGian", 1),
-        new AxisLevel("month", "Thang", "[Dim Thoi Gian].[Thang].[Thang]", "h_time", "H_ThoiGian", 2),
-        new AxisLevel("timeKey", "Ma thoi gian", "[Dim Thoi Gian].[Ma Thoi Gian].[Ma Thoi Gian]")
+        new AxisLevel("year", "Năm", "[Dim Thoi Gian].[Nam].[Nam]", "h_time", "H_ThoiGian", 0),
+        new AxisLevel("quarter", "Quý", "[Dim Thoi Gian].[Quy].[Quy]", "h_time", "H_ThoiGian", 1),
+        new AxisLevel("month", "Tháng", "[Dim Thoi Gian].[Thang].[Thang]", "h_time", "H_ThoiGian", 2),
+        new AxisLevel("timeKey", "Mã thời gian", "[Dim Thoi Gian].[Ma Thoi Gian].[Ma Thoi Gian]")
     };
 
     private static readonly IReadOnlyDictionary<string, DimensionDefinition> BanHangDimensions =
         BuildDimensionDictionary(
-            new DimensionDefinition("time", "Time", TimeLevels),
+            new DimensionDefinition("time", "Thời gian", TimeLevels),
             new DimensionDefinition(
                 "customer",
-                "Khach hang",
+                "Khách hàng",
                 new[]
                 {
                     new AxisLevel("state", "Bang", "[Dim Khach Hang].[Bang].[Bang]"),
-                    new AxisLevel("city", "Thanh pho", "[Dim Khach Hang].[Ten Thanh Pho].[Ten Thanh Pho]"),
-                    new AxisLevel("cityCode", "Ma thanh pho", "[Dim Khach Hang].[Ma Thanh Pho].[Ma Thanh Pho]", "h_customer", "Hierarchy", 0),
-                    new AxisLevel("customerName", "Ten khach hang", "[Dim Khach Hang].[Ten Khach Hang].[Ten Khach Hang]", "h_customer", "Hierarchy", 1),
-                    new AxisLevel("customerCode", "Ma khach hang", "[Dim Khach Hang].[Ma Khach Hang].[Ma Khach Hang]"),
-                    new AxisLevel("officeAddress", "Dia chi van phong", "[Dim Khach Hang].[Dia Chi Van Phong].[Dia Chi Van Phong]"),
-                    new AxisLevel("firstOrderDate", "Ngay dat hang dau tien", "[Dim Khach Hang].[Ngay Dat Hang Dau Tien].[Ngay Dat Hang Dau Tien]")
+                    new AxisLevel("city", "Thành phố", "[Dim Khach Hang].[Ten Thanh Pho].[Ten Thanh Pho]"),
+                    new AxisLevel("cityCode", "Mã thành phố", "[Dim Khach Hang].[Ma Thanh Pho].[Ma Thanh Pho]", "h_customer", "Phân cấp", 0),
+                    new AxisLevel("customerName", "Tên khách hàng", "[Dim Khach Hang].[Ten Khach Hang].[Ten Khach Hang]", "h_customer", "Phân cấp", 1),
+                    new AxisLevel("customerCode", "Mã khách hàng", "[Dim Khach Hang].[Ma Khach Hang].[Ma Khach Hang]"),
+                    new AxisLevel("officeAddress", "Địa chỉ văn phòng", "[Dim Khach Hang].[Dia Chi Van Phong].[Dia Chi Van Phong]"),
+                    new AxisLevel("firstOrderDate", "Ngày đặt hàng đầu tiên", "[Dim Khach Hang].[Ngay Dat Hang Dau Tien].[Ngay Dat Hang Dau Tien]")
                 }),
             new DimensionDefinition(
                 "product",
-                "Mat hang",
+                "Mặt hàng",
                 new[]
                 {
-                    new AxisLevel("product", "Ma mat hang", "[Dim Mat Hang].[Ma Mat Hang].[Ma Mat Hang]"),
-                    new AxisLevel("size", "Kich co", "[Dim Mat Hang].[Kich Co].[Kich Co]"),
-                    new AxisLevel("weight", "Trong luong", "[Dim Mat Hang].[Trong Luong].[Trong Luong]"),
-                    new AxisLevel("price", "Gia", "[Dim Mat Hang].[Gia].[Gia]"),
-                    new AxisLevel("description", "Mo ta", "[Dim Mat Hang].[Mo Ta].[Mo Ta]")
+                    new AxisLevel("product", "Mã mặt hàng", "[Dim Mat Hang].[Ma Mat Hang].[Ma Mat Hang]"),
+                    new AxisLevel("size", "Kích cỡ", "[Dim Mat Hang].[Kich Co].[Kich Co]"),
+                    new AxisLevel("weight", "Trọng lượng", "[Dim Mat Hang].[Trong Luong].[Trong Luong]"),
+                    new AxisLevel("price", "Giá", "[Dim Mat Hang].[Gia].[Gia]"),
+                    new AxisLevel("description", "Mô tả", "[Dim Mat Hang].[Mo Ta].[Mo Ta]")
                 }));
 
     private static readonly IReadOnlyList<string> BanHangDimensionOrder = new[]
@@ -57,29 +58,29 @@ public sealed class OlapController : ControllerBase
 
     private static readonly IReadOnlyDictionary<string, DimensionDefinition> TonKhoDimensions =
         BuildDimensionDictionary(
-            new DimensionDefinition("time", "Time", TimeLevels),
+            new DimensionDefinition("time", "Thời gian", TimeLevels),
             new DimensionDefinition(
                 "store",
-                "Cua hang",
+                "Cửa hàng",
                 new[]
                 {
                     new AxisLevel("state", "Bang", "[Dim Cua Hang].[Bang].[Bang]", "h_store", "H_DiaLyCuaHang", 0),
-                    new AxisLevel("city", "Thanh pho", "[Dim Cua Hang].[Ten Thanh Pho].[Ten Thanh Pho]", "h_store", "H_DiaLyCuaHang", 1),
-                    new AxisLevel("cityCode", "Ma thanh pho", "[Dim Cua Hang].[Ma Thanh Pho].[Ma Thanh Pho]"),
-                    new AxisLevel("store", "Ma cua hang", "[Dim Cua Hang].[Ma Cua Hang].[Ma Cua Hang]", "h_store", "H_DiaLyCuaHang", 2),
-                    new AxisLevel("officeAddress", "Dia chi van phong", "[Dim Cua Hang].[Dia Chi Van Phong].[Dia Chi Van Phong]"),
-                    new AxisLevel("phone", "So dien thoai", "[Dim Cua Hang].[So Dien Thoai].[So Dien Thoai]")
+                    new AxisLevel("city", "Thành phố", "[Dim Cua Hang].[Ten Thanh Pho].[Ten Thanh Pho]", "h_store", "H_DiaLyCuaHang", 1),
+                    new AxisLevel("cityCode", "Mã thành phố", "[Dim Cua Hang].[Ma Thanh Pho].[Ma Thanh Pho]"),
+                    new AxisLevel("store", "Mã cửa hàng", "[Dim Cua Hang].[Ma Cua Hang].[Ma Cua Hang]", "h_store", "H_DiaLyCuaHang", 2),
+                    new AxisLevel("officeAddress", "Địa chỉ văn phòng", "[Dim Cua Hang].[Dia Chi Van Phong].[Dia Chi Van Phong]"),
+                    new AxisLevel("phone", "Số điện thoại", "[Dim Cua Hang].[So Dien Thoai].[So Dien Thoai]")
                 }),
             new DimensionDefinition(
                 "product",
-                "Mat hang",
+                "Mặt hàng",
                 new[]
                 {
-                    new AxisLevel("product", "Ma mat hang", "[Dim Mat Hang].[Ma Mat Hang].[Ma Mat Hang]"),
-                    new AxisLevel("size", "Kich co", "[Dim Mat Hang].[Kich Co].[Kich Co]"),
-                    new AxisLevel("weight", "Trong luong", "[Dim Mat Hang].[Trong Luong].[Trong Luong]"),
-                    new AxisLevel("price", "Gia", "[Dim Mat Hang].[Gia].[Gia]"),
-                    new AxisLevel("description", "Mo ta", "[Dim Mat Hang].[Mo Ta].[Mo Ta]")
+                    new AxisLevel("product", "Mã mặt hàng", "[Dim Mat Hang].[Ma Mat Hang].[Ma Mat Hang]"),
+                    new AxisLevel("size", "Kích cỡ", "[Dim Mat Hang].[Kich Co].[Kich Co]"),
+                    new AxisLevel("weight", "Trọng lượng", "[Dim Mat Hang].[Trong Luong].[Trong Luong]"),
+                    new AxisLevel("price", "Giá", "[Dim Mat Hang].[Gia].[Gia]"),
+                    new AxisLevel("description", "Mô tả", "[Dim Mat Hang].[Mo Ta].[Mo Ta]")
                 }));
 
     private static readonly IReadOnlyList<string> TonKhoDimensionOrder = new[]
@@ -396,7 +397,7 @@ WHERE ( {string.Join(", ", whereItems)} )";
                 new OlapMeasureMetadata
                 {
                     Key = "revenue",
-                    Label = "Revenue",
+                    Label = "Doanh thu",
                     CubeType = "banhang",
                     CubeName = options.CubeBanHang,
                     MeasureExpression = $"[Measures].[{EscapeMdxName(options.MeasureTongDoanhThu)}]",
@@ -405,7 +406,7 @@ WHERE ( {string.Join(", ", whereItems)} )";
                 new OlapMeasureMetadata
                 {
                     Key = "orderCount",
-                    Label = "Order Count",
+                    Label = "Số lượng hàng",
                     CubeType = "banhang",
                     CubeName = options.CubeBanHang,
                     MeasureExpression = "[Measures].[So Luong Hang]",
@@ -414,7 +415,7 @@ WHERE ( {string.Join(", ", whereItems)} )";
                 new OlapMeasureMetadata
                 {
                     Key = "inventory",
-                    Label = "Inventory",
+                    Label = "Số lượng tồn kho",
                     CubeType = "tonkho",
                     CubeName = options.CubeTonKho,
                     MeasureExpression = $"[Measures].[{EscapeMdxName(options.MeasureSoLuongTonKho)}]",
@@ -498,7 +499,8 @@ WHERE ( {string.Join(", ", whereItems)} )";
             return caption;
         }
 
-        if (levelLabel.Equals("Quy", StringComparison.OrdinalIgnoreCase))
+        var normalizedLevelLabel = RemoveDiacritics(levelLabel).ToLowerInvariant();
+        if (normalizedLevelLabel == "quy")
         {
             if (keys.Length >= 2)
             {
@@ -508,17 +510,17 @@ WHERE ( {string.Join(", ", whereItems)} )";
             return caption.StartsWith("Q", StringComparison.OrdinalIgnoreCase) ? caption.ToUpperInvariant() : $"Q{caption}";
         }
 
-        if (levelLabel.Equals("Thang", StringComparison.OrdinalIgnoreCase))
+        if (normalizedLevelLabel == "thang")
         {
             if (keys.Length >= 2)
             {
-                return $"{keys[^2]} - Thang {keys[^1]}";
+                return $"{keys[^2]} - Tháng {keys[^1]}";
             }
 
-            return caption.StartsWith("Thang ", StringComparison.OrdinalIgnoreCase) ? caption : $"Thang {caption}";
+            return caption.StartsWith("Tháng ", StringComparison.OrdinalIgnoreCase) ? caption : $"Tháng {caption}";
         }
 
-        if (levelLabel.Equals("Nam", StringComparison.OrdinalIgnoreCase) && keys.Length >= 1)
+        if (normalizedLevelLabel == "nam" && keys.Length >= 1)
         {
             return keys[^1];
         }
@@ -849,12 +851,34 @@ WHERE ( {string.Join(", ", whereItems)} )";
     {
         return dimension switch
         {
-            "time" => "Thoi gian",
-            "store" => "Cua hang",
-            "product" => "Mat hang",
-            "customer" => "Khach hang",
-            _ => "Dimension"
+            "time" => "Thời gian",
+            "store" => "Cửa hàng",
+            "product" => "Mặt hàng",
+            "customer" => "Khách hàng",
+            _ => "Chiều dữ liệu"
         };
+    }
+
+    private static string RemoveDiacritics(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var normalized = value.Normalize(NormalizationForm.FormD);
+        var builder = new StringBuilder(normalized.Length);
+        foreach (var c in normalized)
+        {
+            if (CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.NonSpacingMark)
+            {
+                builder.Append(c);
+            }
+        }
+
+        return builder
+            .ToString()
+            .Normalize(NormalizationForm.FormC);
     }
 
     private static string EscapeMdxName(string value)

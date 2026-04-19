@@ -1,6 +1,5 @@
 import { Navigate, RouterProvider, createBrowserRouter } from 'react-router-dom'
 import MainLayout from './components/layout/MainLayout'
-import DataValidationPage from './pages/DataValidationPage'
 import DashboardPage from './pages/DashboardPage'
 import OlapExplorerPage from './pages/OlapExplorerPage'
 import ReportDetailPage from './pages/ReportDetailPage'
@@ -15,7 +14,6 @@ const router = createBrowserRouter([
       { path: 'olap', element: <OlapExplorerPage /> },
       { path: 'reports', element: <ReportMenuPage /> },
       { path: 'reports/:id', element: <ReportDetailPage /> },
-      { path: 'compare', element: <DataValidationPage /> },
       { path: '*', element: <Navigate to="/" replace /> },
     ],
   },

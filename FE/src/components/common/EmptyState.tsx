@@ -5,7 +5,7 @@ interface EmptyStateProps {
 
 export default function EmptyState({
   title = 'Chưa có dữ liệu hiển thị',
-  note = 'TODO: Nối dữ liệu từ backend sau khi hoàn tất cube.',
+  note = 'Vui lòng kiểm tra bộ lọc hoặc tải lại dữ liệu.',
 }: EmptyStateProps) {
   return (
     <div className="state-card">

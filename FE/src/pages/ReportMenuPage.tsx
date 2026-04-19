@@ -6,8 +6,8 @@ export default function ReportMenuPage() {
   return (
     <div className="page-stack">
       <PageHeader
-        title="Danh sách 9 báo cáo BTL"
-        description="Chọn báo cáo để xem khung giao diện, filter, chart và dữ liệu lấy từ API."
+        title="Danh sách báo cáo"
+        description="Chọn báo cáo để xem biểu đồ, bảng dữ liệu và bộ lọc."
       />
 
       <section className="report-menu-grid">

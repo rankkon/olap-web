@@ -40,7 +40,7 @@ export function useReport(reportId: number, year?: number) {
           return
         }
 
-        const message = err instanceof Error ? err.message : 'Khong the tai du lieu tu backend.'
+        const message = err instanceof Error ? err.message : 'Không thể tải dữ liệu từ backend.'
         setError(message)
         setData(null)
       } finally {

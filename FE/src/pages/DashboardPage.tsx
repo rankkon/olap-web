@@ -1,13 +1,13 @@
-﻿import { Link } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import PageHeader from '../components/common/PageHeader'
-import { DASHBOARD_HIGHLIGHTS, REPORT_ROUTES } from '../utils/constants'
+import { REPORT_ROUTES } from '../utils/constants'
 
 export default function DashboardPage() {
   return (
     <div className="page-stack">
       <PageHeader
-        title="Dashboard tổng quan OLAP"
-        description="Khung giao diện frontend cho bài tập lớn Kho dữ liệu, ưu tiên sẵn sàng tích hợp cube và API sau."
+        title="Tổng quan hệ thống OLAP"
+        description="Màn hình đơn giản để điều hướng nhanh tới Explorer và các báo cáo."
         action={
           <Link className="btn-primary" to="/olap">
             Mở OLAP Explorer
@@ -15,31 +15,25 @@ export default function DashboardPage() {
         }
       />
 
-      <section className="kpi-grid">
-        {DASHBOARD_HIGHLIGHTS.map((item) => (
-          <article className="kpi-card" key={item.label}>
-            <p>{item.label}</p>
-            <h3>{item.value}</h3>
-            <small>{item.note}</small>
-          </article>
-        ))}
+      <section className="content-card">
+        <div className="card-header">
+          <h3>Truy cập nhanh</h3>
+          <Link className="text-link" to="/reports">
+            Xem danh sách báo cáo
+          </Link>
+        </div>
+        <div className="action-row">
+          <Link className="btn-secondary" to="/olap">Mở OLAP Explorer</Link>
+          <Link className="btn-secondary" to="/reports">Mở khu vực báo cáo</Link>
+        </div>
       </section>
 
       <section className="content-card">
         <div className="card-header">
-          <h3>Điều hướng nhanh</h3>
-          <Link className="text-link" to="/reports">
-            Xem tất cả báo cáo
-          </Link>
+          <h3>Báo cáo gần đây</h3>
         </div>
         <div className="report-menu-grid">
-          <article className="report-menu-card report-menu-card-accent">
-            <span>EXPLORER</span>
-            <h3>OLAP Explorer</h3>
-            <p>Khoan sâu, khoan lên, pivot và chọn measure/dimension trực tiếp.</p>
-            <Link to="/olap">Mở explorer</Link>
-          </article>
-          {REPORT_ROUTES.map((report) => (
+          {REPORT_ROUTES.slice(0, 4).map((report) => (
             <article className="report-menu-card" key={report.id}>
               <span>{report.shortTitle}</span>
               <h3>{report.fullTitle}</h3>

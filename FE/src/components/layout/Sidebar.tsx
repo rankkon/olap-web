@@ -1,47 +1,66 @@
 import { NavLink } from 'react-router-dom'
-import { REPORT_ROUTES, SIDEBAR_LINKS } from '../../utils/constants'
+import { SIDEBAR_LINKS } from '../../utils/constants'
 
 function isActiveClass(isActive: boolean) {
   return isActive ? 'nav-link nav-link-active' : 'nav-link'
 }
 
-function shortReportTitle(fullTitle: string): string {
-  return fullTitle.replace(/^bao cao\s*\d+\s*-\s*/i, '')
+function toShortNavLabel(fullLabel: string): string {
+  const words = fullLabel
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+  if (words.length === 0) {
+    return '...'
+  }
+
+  if (words.length === 1) {
+    return words[0].slice(0, 2).toUpperCase()
+  }
+
+  return words.map((word) => word[0]).join('').slice(0, 3).toUpperCase()
 }
 
-export default function Sidebar() {
+interface SidebarProps {
+  collapsed: boolean
+  onToggle: () => void
+}
+
+export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
   return (
-    <aside className="sidebar">
-      <div className="brand-block">
-        <p className="brand-kicker">DWH Team</p>
-        <h2>OLAP Web</h2>
+    <aside className={`sidebar ${collapsed ? 'is-collapsed' : ''}`}>
+      <div className="sidebar-head">
+        <div className="brand-block">
+          <p className="brand-kicker">DWH Team</p>
+          <h2>OLAP Web</h2>
+        </div>
+        <button
+          aria-label={collapsed ? 'Mo thanh ben' : 'Thu gon thanh ben'}
+          className="sidebar-toggle-btn"
+          onClick={onToggle}
+          type="button"
+        >
+          {collapsed ? '\u25B6' : '\u25C0'}
+        </button>
       </div>
 
       <nav aria-label="Main">
         <ul className="nav-list">
           {SIDEBAR_LINKS.map((item) => (
             <li key={item.to}>
-              <NavLink className={({ isActive }) => isActiveClass(isActive)} to={item.to} end>
-                {item.label}
+              <NavLink
+                className={({ isActive }) => isActiveClass(isActive)}
+                title={collapsed ? item.label : undefined}
+                to={item.to}
+                end
+              >
+                <span className="sidebar-link-short">{toShortNavLabel(item.label)}</span>
+                <span className="sidebar-link-text">{item.label}</span>
               </NavLink>
             </li>
           ))}
         </ul>
       </nav>
-
-      <section className="sidebar-section">
-        <p className="sidebar-caption">Report Quick Access</p>
-        <ul className="report-shortcuts">
-          {REPORT_ROUTES.map((report) => (
-            <li key={report.id}>
-              <NavLink className={({ isActive }) => isActiveClass(isActive)} to={report.path}>
-                <span>{report.shortTitle}</span>
-                <small>{shortReportTitle(report.fullTitle)}</small>
-              </NavLink>
-            </li>
-          ))}
-        </ul>
-      </section>
     </aside>
   )
 }

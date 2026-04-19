@@ -113,11 +113,11 @@ function buildLevelId(dimension: OlapDimension, levelKey: string): string {
 function formatCubeLabel(cubeType: string, cubeName: string): string {
   const normalized = cubeType.trim().toLowerCase()
   if (normalized === 'banhang') {
-    return `Ban hang (${cubeName})`
+    return `Bán hàng (${cubeName})`
   }
 
   if (normalized === 'tonkho') {
-    return `Ton kho (${cubeName})`
+    return `Tồn kho (${cubeName})`
   }
 
   return `${cubeType} (${cubeName})`
@@ -218,10 +218,10 @@ function resolveMemberColumns(columns: string[]): MemberColumns {
   }
 }
 
-function membersQuery(cubeName: string, levelExpression: string, limit: number): string {
+function membersQuery(cubeName: string, levelExpression: string): string {
   return [
     'SELECT {[Measures].DefaultMember} ON COLUMNS,',
-    `NON EMPTY HEAD(${levelExpression}.MEMBERS, ${limit}) DIMENSION PROPERTIES MEMBER_CAPTION, MEMBER_UNIQUE_NAME ON ROWS`,
+    `NON EMPTY ${levelExpression}.MEMBERS DIMENSION PROPERTIES MEMBER_CAPTION, MEMBER_UNIQUE_NAME ON ROWS`,
     `FROM [${escapeMdxIdentifier(cubeName)}]`,
   ].join(' ')
 }
@@ -375,7 +375,7 @@ function normalizeFlatTable(
       : result.columns.filter((column) => !uniqueColumns.has(column))
     const columns: TableColumn[] = measureColumns.map((_, index) => ({
       key: `measure_${index}`,
-      label: measureLabels[index] ?? `Measure ${index + 1}`,
+      label: measureLabels[index] ?? `Độ đo ${index + 1}`,
       align: 'center',
     }))
 
@@ -404,8 +404,8 @@ function normalizeFlatTable(
     columns.push({
       key: `level_${index}`,
       label: selectedLevel
-        ? `${selectedLevel.dimensionLabel} - ${selectedLevel.levelLabel}`
-        : `Level ${index + 1}`,
+        ? selectedLevel.levelLabel
+        : `Chiều ${index + 1}`,
       align: 'center',
     })
   })
@@ -413,7 +413,7 @@ function normalizeFlatTable(
   valueColumns.forEach((_column, index) => {
     columns.push({
       key: `value_${index}`,
-      label: measureLabels[index] ?? `Measure ${index + 1}`,
+      label: measureLabels[index] ?? `Độ đo ${index + 1}`,
       align: 'center',
     })
   })
@@ -458,7 +458,7 @@ function toPivotRenderData(
   measureLabels: string[],
 ): PivotRenderData {
   const levelRows = selectedLevels.map((level, levelIndex) => ({
-    label: `${level.dimensionLabel} - ${level.levelLabel}`,
+    label: level.levelLabel,
     values: table.rows.map((row) => String(row[`level_${levelIndex}`] ?? '-')),
   }))
 
@@ -471,16 +471,6 @@ function toPivotRenderData(
     levelRows,
     measureRows,
   }
-}
-
-function activeFilterCount(selectedLevels: SelectedLevel[], appliedFilters: Record<string, string[]>): number {
-  return selectedLevels.reduce((count, level) => {
-    if ((appliedFilters[level.id] ?? []).length > 0) {
-      return count + 1
-    }
-
-    return count
-  }, 0)
 }
 
 function safeParseLevelPayload(raw: string): LevelDragPayload | null {
@@ -514,7 +504,7 @@ export default function OlapExplorerPage() {
   const [expandedDimensions, setExpandedDimensions] = useState<Partial<Record<OlapDimension, boolean>>>({})
   const [isPivoted, setIsPivoted] = useState(false)
   const [refreshToken, setRefreshToken] = useState(0)
-  const [lastAction, setLastAction] = useState('Workspace ready')
+  const [, setLastAction] = useState('Sẵn sàng')
   const [mdxPreview, setMdxPreview] = useState('')
 
   const [draftFilters, setDraftFilters] = useState<Record<string, string[]>>({})
@@ -723,7 +713,7 @@ export default function OlapExplorerPage() {
           selectedLevels.map(async (level) => {
             const result = await executeOlapQuery(
               selectedMeasure.cubeName,
-              membersQuery(selectedMeasure.cubeName, level.levelExpression, 260),
+              membersQuery(selectedMeasure.cubeName, level.levelExpression),
             )
 
             return {
@@ -750,7 +740,7 @@ export default function OlapExplorerPage() {
           return
         }
 
-        const message = error instanceof Error ? error.message : 'Khong the tai members cho bo loc.'
+        const message = error instanceof Error ? error.message : 'Không thể tải giá trị cho bộ lọc.'
         setFilterError(message)
         setOptionsByLevel({})
       } finally {
@@ -850,7 +840,7 @@ export default function OlapExplorerPage() {
           return
         }
 
-        const message = error instanceof Error ? error.message : 'Khong the lay du lieu tu cube.'
+        const message = error instanceof Error ? error.message : 'Không thể lấy dữ liệu từ khối OLAP.'
         if (!isLoadMoreRequest) {
           setQueryError(message)
           tableRef.current = EMPTY_TABLE
@@ -858,7 +848,7 @@ export default function OlapExplorerPage() {
           setPivotData(null)
           setHasMoreRows(false)
         } else {
-          setLastAction(`Tai them du lieu that bai: ${message}`)
+          setLastAction(`Tải thêm dữ liệu thất bại: ${message}`)
           restoreScrollAfterLoadMore()
         }
       } finally {
@@ -884,27 +874,6 @@ export default function OlapExplorerPage() {
     [selectedLevels],
   )
 
-  const breadcrumb = useMemo(() => {
-    if (!selectedMeasure) {
-      return 'Chua co measure.'
-    }
-
-    if (selectedLevels.length === 0) {
-      return `0D | Measure: ${selectedMeasure.label}`
-    }
-
-    const levelPath = selectedLevels
-      .map((level) => `${level.dimensionLabel}.${level.levelLabel}`)
-      .join(' > ')
-
-    return levelPath
-  }, [selectedLevels, selectedMeasure])
-
-  const appliedFilterTotal = useMemo(
-    () => activeFilterCount(selectedLevels, appliedFilters),
-    [appliedFilters, selectedLevels],
-  )
-
   const handleCubeChange = (nextCubeName: string) => {
     const nextCube = cubeOptions.find((cube) => cube.value === nextCubeName)
     if (!nextCube || nextCube.measures.length === 0) {
@@ -916,19 +885,19 @@ export default function OlapExplorerPage() {
     setSelectedMeasureKeys([nextCube.measures[0].key])
     setExpandedDimensions({})
     clearWorkspaceSelections()
-    setLastAction(`Da chuyen cube: ${nextCubeName}`)
+    setLastAction(`Đã chuyển khối dữ liệu: ${nextCubeName}`)
   }
 
   const toggleMeasureSelection = (measureKey: string) => {
     setSelectedMeasureKeys((previous) => {
       if (!previous.includes(measureKey)) {
         setSelectedMeasureKey(measureKey)
-        setLastAction('Da them measure vao ket qua.')
+        setLastAction('Đã thêm độ đo vào kết quả.')
         return [...previous, measureKey]
       }
 
       if (previous.length <= 1) {
-        setLastAction('Can giu it nhat 1 measure.')
+        setLastAction('Cần giữ ít nhất 1 độ đo.')
         return previous
       }
 
@@ -936,7 +905,7 @@ export default function OlapExplorerPage() {
       if (measureKey === selectedMeasureKey) {
         setSelectedMeasureKey(next[0])
       }
-      setLastAction('Da bo measure khoi ket qua.')
+      setLastAction('Đã bỏ độ đo khỏi kết quả.')
       return next
     })
   }
@@ -958,35 +927,35 @@ export default function OlapExplorerPage() {
     const nextLevel = toSelectedLevel(payload)
 
     if (!allowedDimensionKeys.has(nextLevel.dimension)) {
-      setLastAction('Level khong thuoc measure hien tai.')
+      setLastAction('Mức không thuộc độ đo hiện tại.')
       return
     }
 
     if (selectedLevelIds.has(nextLevel.id)) {
-      setLastAction('Level da ton tai trong layout.')
+      setLastAction('Mức đã tồn tại trong bố cục.')
       return
     }
 
     setSelectedLevels((previous) => [...previous, nextLevel])
-    setLastAction(`Da them level ${nextLevel.dimensionLabel} - ${nextLevel.levelLabel}.`)
+    setLastAction(`Đã thêm mức ${nextLevel.dimensionLabel} - ${nextLevel.levelLabel}.`)
   }
 
   const toggleLevelFromTree = (payload: LevelDragPayload) => {
     const nextLevel = toSelectedLevel(payload)
 
     if (!allowedDimensionKeys.has(nextLevel.dimension)) {
-      setLastAction('Level khong thuoc measure hien tai.')
+      setLastAction('Mức không thuộc độ đo hiện tại.')
       return
     }
 
     if (selectedLevelIds.has(nextLevel.id)) {
       removeLevel(nextLevel.id)
-      setLastAction(`Da xoa level ${nextLevel.dimensionLabel} - ${nextLevel.levelLabel}.`)
+      setLastAction(`Đã xóa mức ${nextLevel.dimensionLabel} - ${nextLevel.levelLabel}.`)
       return
     }
 
     setSelectedLevels((previous) => [...previous, nextLevel])
-    setLastAction(`Da them level ${nextLevel.dimensionLabel} - ${nextLevel.levelLabel}.`)
+    setLastAction(`Đã thêm mức ${nextLevel.dimensionLabel} - ${nextLevel.levelLabel}.`)
   }
 
   const reorderSelectedLevels = (draggedId: string, targetId: string) => {
@@ -1006,7 +975,7 @@ export default function OlapExplorerPage() {
       next.splice(targetIndex, 0, item)
       return next
     })
-    setLastAction('Da sap xep lai thu tu level.')
+    setLastAction('Đã sắp xếp lại thứ tự mức.')
   }
 
   const removeLevel = (levelId: string) => {
@@ -1014,7 +983,7 @@ export default function OlapExplorerPage() {
     setDraftFilters((previous) => omitRecordKey(previous, levelId))
     setAppliedFilters((previous) => omitRecordKey(previous, levelId))
     setOptionsByLevel((previous) => omitRecordKey(previous, levelId))
-    setLastAction('Da xoa level khoi layout.')
+    setLastAction('Đã xóa mức khỏi bố cục.')
   }
 
   const getHierarchyRollTarget = (level: SelectedLevel, direction: -1 | 1) => {
@@ -1091,7 +1060,7 @@ export default function OlapExplorerPage() {
 
     const duplicate = selectedLevels.some((item) => item.id === target.targetId && item.id !== current.id)
     if (duplicate) {
-      setLastAction('Level muc tieu da ton tai trong layout.')
+      setLastAction('Mức mục tiêu đã tồn tại trong bố cục.')
       return
     }
 
@@ -1130,7 +1099,7 @@ export default function OlapExplorerPage() {
     setOptionsByLevel((previous) => {
       return omitRecordKey(previous, levelId)
     })
-    setLastAction(direction > 0 ? 'Da drill down theo hierarchy.' : 'Da roll up theo hierarchy.')
+    setLastAction(direction > 0 ? 'Đã khoan sâu theo phân cấp.' : 'Đã cuộn lên theo phân cấp.')
   }
 
   const toggleDimension = (dimension: OlapDimension) => {
@@ -1149,30 +1118,30 @@ export default function OlapExplorerPage() {
 
   const applyFilters = () => {
     setAppliedFilters(buildLevelValueMap(selectedLevels, draftFilters))
-    setLastAction('Da ap dung bo loc.')
+    setLastAction('Đã áp dụng bộ lọc.')
   }
 
   const clearFilters = () => {
     const cleared = buildLevelValueMap(selectedLevels)
     setDraftFilters(cleared)
     setAppliedFilters(cleared)
-    setLastAction('Da xoa bo loc.')
+    setLastAction('Đã xóa bộ lọc.')
   }
 
   const refreshData = () => {
     resetPagination()
     setRefreshToken((previous) => previous + 1)
-    setLastAction('Da refresh du lieu tu cube.')
+    setLastAction('Đã làm mới dữ liệu từ khối OLAP.')
   }
 
   const togglePivot = () => {
     setIsPivoted((previous) => !previous)
-    setLastAction('Da pivot layout.')
+    setLastAction('Đã xoay trục bố cục.')
   }
 
   const resetLayout = () => {
     clearWorkspaceSelections()
-    setLastAction('Da reset layout.')
+    setLastAction('Đã đặt lại bố cục.')
   }
 
   const loadMoreRows = () => {
@@ -1182,7 +1151,7 @@ export default function OlapExplorerPage() {
 
     loadMoreScrollYRef.current = window.scrollY
     setRowOffset((previous) => previous + PAGE_SIZE)
-    setLastAction(`Dang tai them ${PAGE_SIZE} dong...`)
+    setLastAction(`Đang tải thêm ${PAGE_SIZE} dòng...`)
   }
 
   return (
@@ -1190,7 +1159,7 @@ export default function OlapExplorerPage() {
       <section className="content-card olap-sticky-toolbar">
         <div className="olap-toolbar-grid-singleline">
           <div className="olap-toolbar-group">
-            <label htmlFor="cube-select">Cube</label>
+            <label htmlFor="cube-select">Khối dữ liệu</label>
             <select
               id="cube-select"
               value={selectedCubeName}
@@ -1207,36 +1176,30 @@ export default function OlapExplorerPage() {
 
           <div className="olap-toolbar-actions-row">
             <button className="btn-secondary" type="button" onClick={refreshData}>
-              Refresh
+              Làm mới
             </button>
             <button className="btn-secondary" type="button" onClick={togglePivot}>
-              Pivot
+              Xoay trục
             </button>
             <button className="btn-secondary" type="button" onClick={resetLayout}>
-              Reset layout
+              Đặt lại bố cục
             </button>
           </div>
         </div>
 
-        <div className="olap-toolbar-meta-line">
-          <p className="olap-breadcrumb-value">{breadcrumb}</p>
-          <span className="badge-note">Active filters: {appliedFilterTotal}</span>
-          <span className="badge-note">Rows: {table.rows.length}</span>
-          <span className="badge-note">Total: {formatNumber(table.total)}</span>
-        </div>
-
-        <div className="olap-toolbar-meta-line">
-          <p className="card-note">Last action: {lastAction}</p>
-          {isMetadataLoading ? <p className="card-note">Dang tai metadata tu cube...</p> : null}
-          {!isMetadataLoading && metadataError ? <p className="card-note">{metadataError}</p> : null}
-        </div>
+        {isMetadataLoading || metadataError ? (
+          <div className="olap-toolbar-meta-line">
+            {isMetadataLoading ? <p className="card-note">Đang tải siêu dữ liệu từ khối OLAP...</p> : null}
+            {!isMetadataLoading && metadataError ? <p className="card-note">{metadataError}</p> : null}
+          </div>
+        ) : null}
       </section>
 
       <div className="olap-browser-shell-v2">
         <div className="olap-browser-main-v2">
           <section className="content-card">
             <div className="card-header">
-              <h3>Workspace layout</h3>
+              <h3>Bố cục truy vấn</h3>
             </div>
 
             <div
@@ -1246,7 +1209,7 @@ export default function OlapExplorerPage() {
             >
               {selectedLevels.length === 0 ? (
                 <p className="card-note">
-                  Keo level tu Dimension Tree vao day. Neu khong chon level nao, bang se hien tong measure (0 chieu).
+                  Kéo mức từ cây chiều dữ liệu vào đây. Nếu không chọn mức nào, bảng sẽ hiển thị tổng độ đo (0 chiều).
                 </p>
               ) : (
                 <ul className="selected-level-list">
@@ -1282,7 +1245,7 @@ export default function OlapExplorerPage() {
                           disabled={!canRollLevel(level, -1)}
                           onClick={() => rollLevel(level.id, -1)}
                           type="button"
-                          title="Roll up"
+                          title="Cuộn lên"
                         >
                           {'\u2191'}
                         </button>
@@ -1291,7 +1254,7 @@ export default function OlapExplorerPage() {
                           disabled={!canRollLevel(level, 1)}
                           onClick={() => rollLevel(level.id, 1)}
                           type="button"
-                          title="Drill down"
+                          title="Khoan sâu xuống"
                         >
                           {'\u2193'}
                         </button>
@@ -1299,7 +1262,7 @@ export default function OlapExplorerPage() {
                           className="btn-secondary axis-mini-btn"
                           onClick={() => removeLevel(level.id)}
                           type="button"
-                          title="Remove"
+                          title="Xóa"
                         >
                           {'\u2715'}
                         </button>
@@ -1311,13 +1274,13 @@ export default function OlapExplorerPage() {
             </div>
 
             <p className="card-note">
-              Nhap cac level theo thu tu phan tich, bam Pivot de doi cach nhin du lieu.
+              Nhập các mức theo thứ tự phân tích, bấm Xoay trục để đổi cách nhìn dữ liệu.
             </p>
           </section>
 
           <section className="content-card">
             <div className="card-header">
-              <h3>Bo loc nghiep vu</h3>
+              <h3>Bộ lọc nghiệp vụ</h3>
             </div>
 
             {selectedLevels.length > 0 ? (
@@ -1330,7 +1293,7 @@ export default function OlapExplorerPage() {
                     <MultiSelectFilter
                       embedded
                       id={`filter-${level.id}`}
-                      label="Select members"
+                      label="Chọn bộ lọc"
                       options={optionsByLevel[level.id] ?? []}
                       value={draftFilters[level.id] ?? []}
                       onChange={(next) => updateDraftFilter(level.id, next)}
@@ -1339,25 +1302,25 @@ export default function OlapExplorerPage() {
                 ))}
               </div>
             ) : (
-              <p className="card-note">Them level vao workspace de bat dau loc du lieu.</p>
+              <p className="card-note">Thêm mức vào bố cục truy vấn để bắt đầu lọc dữ liệu.</p>
             )}
 
             <div className="action-row">
               <button className="btn-secondary" type="button" onClick={applyFilters}>
-                Apply filter
+                Áp dụng bộ lọc
               </button>
               <button className="btn-secondary" type="button" onClick={clearFilters}>
-                Clear filter
+                Xóa bộ lọc
               </button>
             </div>
 
-            {isFilterLoading ? <p className="card-note">Dang tai members...</p> : null}
+            {isFilterLoading ? <p className="card-note">Đang tải giá trị bộ lọc...</p> : null}
             {!isFilterLoading && filterError ? <p className="card-note">{filterError}</p> : null}
           </section>
 
           <section className="content-card">
             <div className="card-header">
-              <h3>Bang ket qua OLAP</h3>
+              <h3>Bảng kết quả OLAP</h3>
             </div>
 
             {isQueryLoading ? <Loading /> : null}
@@ -1397,19 +1360,19 @@ export default function OlapExplorerPage() {
                 ) : table.columns.length > 0 ? (
                   <DataTable columns={table.columns} rows={table.rows} />
                 ) : (
-                  <p className="card-note">Khong co du lieu de hien thi.</p>
+                  <p className="card-note">Không có dữ liệu để hiển thị.</p>
                 )}
 
                 {hasMoreRows && !queryError && selectedLevels.length > 0 ? (
                   <div className="olap-see-more-row">
                     <button className="btn-secondary" disabled={isLoadingMore} onClick={loadMoreRows} type="button">
-                      {isLoadingMore ? 'Dang tai...' : 'See more'}
+                      {isLoadingMore ? 'Đang tải...' : 'Xem thêm'}
                     </button>
                   </div>
                 ) : null}
 
                 <details className="olap-mdx-preview">
-                  <summary>MDX generated</summary>
+                  <summary>MDX đã tạo</summary>
                   <pre>{mdxPreview}</pre>
                 </details>
               </>
@@ -1419,17 +1382,13 @@ export default function OlapExplorerPage() {
 
         <aside className="content-card dimension-tree-panel">
           <div className="card-header">
-            <h3>Dimension Tree</h3>
+            <h3>Cây chiều dữ liệu</h3>
           </div>
-
-          <p className="card-note">
-            Expand dimension, keo level vao Workspace layout. Co the keo nhieu level cua cung mot dimension.
-          </p>
 
           <section className="dimension-tree-node measure-tree-node">
             <button className="dimension-tree-toggle" type="button">
               <span className="tree-toggle-icon">M</span>
-              <span className="dimension-node-label">Measures</span>
+              <span className="dimension-node-label">Độ đo</span>
             </button>
             <ul className="dimension-tree-levels">
               {(selectedCube?.measures ?? []).map((measure) => {

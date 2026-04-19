@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import BarChartCard from '../components/charts/BarChartCard'
 import LineChartCard from '../components/charts/LineChartCard'
 import PieChartCard from '../components/charts/PieChartCard'
@@ -33,7 +33,6 @@ export default function ReportPageScaffold({
   const [selectedYear, setSelectedYear] = useState<number>(resolveYear(DEFAULT_YEAR_VALUE))
   const requiresYearFilter = filterMode === 'year'
   const yearForApi = requiresYearFilter ? selectedYear : undefined
-  const activeFilterCount = requiresYearFilter ? 1 : 0
   const { data, isLoading, error, refetch } = useReport(reportId, yearForApi)
 
   useEffect(() => {
@@ -44,8 +43,6 @@ export default function ReportPageScaffold({
     setSelectedYear(resolveYear(DEFAULT_YEAR_VALUE))
   }
 
-  const yearSelectValue = useMemo(() => String(selectedYear), [selectedYear])
-
   return (
     <div className="page-stack">
       <PageHeader
@@ -53,9 +50,9 @@ export default function ReportPageScaffold({
         description={description}
         action={
           <div className="header-action-row">
-            <span className="badge-note">Filters: {activeFilterCount}</span>
+            <span className="badge-note">Bộ lọc: {requiresYearFilter ? 1 : 0}</span>
             <button className="btn-primary" type="button" onClick={refetch}>
-              Refresh API
+              Làm mới dữ liệu
             </button>
           </div>
         }
@@ -64,18 +61,18 @@ export default function ReportPageScaffold({
       {requiresYearFilter ? (
         <section className="content-card">
           <div className="card-header">
-            <h3>Bo loc bao cao</h3>
+            <h3>Bộ lọc báo cáo</h3>
             <button className="btn-secondary" type="button" onClick={resetFilters}>
-              Reset
+              Đặt lại
             </button>
           </div>
           <div className="filters-grid">
             <div className="filter-field">
-              <label htmlFor="report-year-filter">Nam</label>
+              <label htmlFor="report-year-filter">Năm</label>
               <select
                 id="report-year-filter"
                 className="workspace-control"
-                value={yearSelectValue}
+                value={String(selectedYear)}
                 onChange={(event) => setSelectedYear(resolveYear(event.target.value))}
               >
                 {TIME_OPTIONS.map((option) => (
@@ -106,12 +103,12 @@ export default function ReportPageScaffold({
           </section>
 
           <section className="charts-grid">
-            <LineChartCard title="Xu huong theo thoi gian" points={data.lineSeries} />
-            <BarChartCard title="Phan bo chinh" points={data.barSeries} />
-            <PieChartCard title="Ty trong danh muc" points={data.pieSeries} />
+            <LineChartCard title="Xu hướng dữ liệu" points={data.lineSeries} />
+            <BarChartCard title="Phân bố chính" points={data.barSeries} />
+            <PieChartCard title="Tỷ trọng danh mục" points={data.pieSeries} />
           </section>
 
-          <ReportTable title="Bang du lieu chi tiet" columns={data.columns} rows={data.rows} />
+          <ReportTable title="Bảng dữ liệu chi tiết" columns={data.columns} rows={data.rows} />
         </>
       ) : null}
     </div>

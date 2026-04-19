@@ -2,18 +2,15 @@ import { useLocation } from 'react-router-dom'
 
 function resolvePageLabel(pathname: string): string {
   if (pathname === '/') {
-    return 'Dashboard'
+    return 'Tổng quan'
   }
   if (pathname.startsWith('/olap')) {
     return 'OLAP Explorer'
   }
   if (pathname.startsWith('/reports')) {
-    return 'Reports'
+    return 'Báo cáo'
   }
-  if (pathname.startsWith('/compare')) {
-    return 'Validation'
-  }
-  return 'Workspace'
+  return 'Màn hình làm việc'
 }
 
 export default function Topbar() {
@@ -23,7 +20,7 @@ export default function Topbar() {
   return (
     <header className="topbar">
       <div>
-        <p className="topbar-label">Current Module</p>
+        <p className="topbar-label">Mô-đun hiện tại</p>
         <h3>{pageLabel}</h3>
       </div>
     </header>

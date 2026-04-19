@@ -20,7 +20,7 @@ function toggleValue(current: string[], item: string): string[] {
 
 function buildSummary(options: SelectOption[], selectedValues: string[]): string {
   if (selectedValues.length === 0) {
-    return 'Chon members'
+    return 'Chọn bộ lọc'
   }
 
   const selectedLabels = options
@@ -31,7 +31,14 @@ function buildSummary(options: SelectOption[], selectedValues: string[]): string
     return selectedLabels.join(', ')
   }
 
-  return `${selectedLabels.length} members da chon`
+  return `${selectedLabels.length} giá trị đã chọn`
+}
+
+function normalizeForSearch(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
 }
 
 export default function MultiSelectFilter({
@@ -43,6 +50,7 @@ export default function MultiSelectFilter({
   embedded = false,
 }: MultiSelectFilterProps) {
   const [isOpen, setIsOpen] = useState(false)
+  const [searchText, setSearchText] = useState('')
   const containerRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -70,6 +78,24 @@ export default function MultiSelectFilter({
   }, [])
 
   const summary = useMemo(() => buildSummary(options, value), [options, value])
+  const filteredOptions = useMemo(() => {
+    const keyword = normalizeForSearch(searchText.trim())
+    if (!keyword) {
+      return options
+    }
+
+    return options.filter((option) => {
+      const normalizedLabel = normalizeForSearch(option.label)
+      const normalizedValue = normalizeForSearch(option.value)
+      return normalizedLabel.includes(keyword) || normalizedValue.includes(keyword)
+    })
+  }, [options, searchText])
+
+  useEffect(() => {
+    if (!isOpen) {
+      setSearchText('')
+    }
+  }, [isOpen])
 
   const content = (
     <div className="multi-select-wrapper" ref={containerRef}>
@@ -89,10 +115,23 @@ export default function MultiSelectFilter({
 
       {isOpen ? (
         <div className="multi-select-panel" id={`${id}-panel`} role="listbox" aria-multiselectable="true">
+          <div className="multi-select-search-wrap">
+            <input
+              aria-label="Tìm kiếm bộ lọc"
+              className="multi-select-search"
+              onChange={(event) => setSearchText(event.target.value)}
+              placeholder="Tìm kiếm bộ lọc..."
+              type="search"
+              value={searchText}
+            />
+          </div>
+
           {options.length === 0 ? (
-            <p className="multi-select-empty">Khong co du lieu.</p>
+            <p className="multi-select-empty">Không có dữ liệu.</p>
+          ) : filteredOptions.length === 0 ? (
+            <p className="multi-select-empty">Không tìm thấy giá trị phù hợp.</p>
           ) : (
-            options.map((option) => {
+            filteredOptions.map((option) => {
               const checked = value.includes(option.value)
               return (
                 <button

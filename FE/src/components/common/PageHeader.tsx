@@ -10,7 +10,7 @@ export default function PageHeader({ title, description, action }: PageHeaderPro
   return (
     <header className="page-header">
       <div>
-        <p className="page-eyebrow">Kho Du Lieu - OLAP Workspace</p>
+        <p className="page-eyebrow">Kho dữ liệu - OLAP</p>
         <h1>{title}</h1>
         {description ? <p className="page-description">{description}</p> : null}
       </div>

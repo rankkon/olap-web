@@ -2,10 +2,9 @@ import type { SelectOption } from '../types/filter'
 import type { ReportRouteMeta } from '../types/report'
 
 export const SIDEBAR_LINKS = [
-  { to: '/', label: 'Dashboard' },
+  { to: '/', label: 'Tổng quan' },
   { to: '/olap', label: 'OLAP Explorer' },
-  { to: '/reports', label: 'Reports' },
-  { to: '/compare', label: 'Data Validation' },
+  { to: '/reports', label: 'Báo cáo' },
 ] as const
 
 export const TIME_OPTIONS: SelectOption[] = [
@@ -16,95 +15,89 @@ export const TIME_OPTIONS: SelectOption[] = [
 ]
 
 export const MEASURE_OPTIONS: SelectOption[] = [
-  { label: 'Revenue', value: 'revenue' },
-  { label: 'Order Count', value: 'orderCount' },
-  { label: 'Inventory', value: 'inventory' },
+  { label: 'Doanh thu', value: 'revenue' },
+  { label: 'Số lượng hàng', value: 'orderCount' },
+  { label: 'Tồn kho', value: 'inventory' },
 ]
 
 export const DIMENSION_OPTIONS: SelectOption[] = [
-  { label: 'Time', value: 'time' },
-  { label: 'Store', value: 'store' },
-  { label: 'Product', value: 'product' },
-  { label: 'Customer', value: 'customer' },
+  { label: 'Thời gian', value: 'time' },
+  { label: 'Cửa hàng', value: 'store' },
+  { label: 'Mặt hàng', value: 'product' },
+  { label: 'Khách hàng', value: 'customer' },
 ]
 
 export const REPORT_ROUTES: ReportRouteMeta[] = [
   {
     id: 1,
     path: '/reports/1',
-    shortTitle: 'R01',
-    fullTitle: 'Bao cao 01 - Ton kho theo cua hang',
-    description: 'Tong hop so luong ton kho theo tung ma cua hang.',
+    shortTitle: 'BC01',
+    fullTitle: 'Báo cáo 01 - Tồn kho theo cửa hàng',
+    description: 'Tổng hợp số lượng tồn kho theo từng mã cửa hàng.',
     filterMode: 'none',
   },
   {
     id: 2,
     path: '/reports/2',
-    shortTitle: 'R02',
-    fullTitle: 'Bao cao 02 - Doanh thu theo quy',
-    description: 'Phan tich doanh thu ban hang theo quy cua nam duoc chon.',
+    shortTitle: 'BC02',
+    fullTitle: 'Báo cáo 02 - Doanh thu theo quý',
+    description: 'Phân tích doanh thu bán hàng theo quý của năm được chọn.',
     filterMode: 'year',
   },
   {
     id: 3,
     path: '/reports/3',
-    shortTitle: 'R03',
-    fullTitle: 'Bao cao 03 - Doanh thu theo thang',
-    description: 'Drill doanh thu theo tung thang cua nam duoc chon.',
+    shortTitle: 'BC03',
+    fullTitle: 'Báo cáo 03 - Doanh thu theo tháng',
+    description: 'Khoan sâu doanh thu theo từng tháng của năm được chọn.',
     filterMode: 'year',
   },
   {
     id: 4,
     path: '/reports/4',
-    shortTitle: 'R04',
-    fullTitle: 'Bao cao 04 - So luong ban theo mat hang',
-    description: 'Theo doi mat hang ban ra nhieu nhat theo so luong.',
+    shortTitle: 'BC04',
+    fullTitle: 'Báo cáo 04 - Số lượng bán theo mặt hàng',
+    description: 'Theo dõi các mặt hàng bán ra nhiều nhất theo số lượng.',
     filterMode: 'none',
   },
   {
     id: 5,
     path: '/reports/5',
-    shortTitle: 'R05',
-    fullTitle: 'Bao cao 05 - Doanh thu theo thanh pho khach hang',
-    description: 'So sanh doanh thu theo noi sinh song cua khach hang.',
+    shortTitle: 'BC05',
+    fullTitle: 'Báo cáo 05 - Doanh thu theo thành phố khách hàng',
+    description: 'So sánh doanh thu theo nơi sinh sống của khách hàng.',
     filterMode: 'none',
   },
   {
     id: 6,
     path: '/reports/6',
-    shortTitle: 'R06',
-    fullTitle: 'Bao cao 06 - Top khach hang theo doanh thu',
-    description: 'Xep hang khach hang dong gop doanh thu cao nhat.',
+    shortTitle: 'BC06',
+    fullTitle: 'Báo cáo 06 - Top khách hàng theo doanh thu',
+    description: 'Xếp hạng khách hàng đóng góp doanh thu cao nhất.',
     filterMode: 'none',
   },
   {
     id: 7,
     path: '/reports/7',
-    shortTitle: 'R07',
-    fullTitle: 'Bao cao 07 - Ton kho theo bang',
-    description: 'Tong hop ton kho theo cap bang cua he thong cua hang.',
+    shortTitle: 'BC07',
+    fullTitle: 'Báo cáo 07 - Tồn kho theo bang',
+    description: 'Tổng hợp tồn kho theo bang của hệ thống cửa hàng.',
     filterMode: 'none',
   },
   {
     id: 8,
     path: '/reports/8',
-    shortTitle: 'R08',
-    fullTitle: 'Bao cao 08 - Ton kho theo thanh pho',
-    description: 'Tong hop ton kho theo thanh pho cua cua hang.',
+    shortTitle: 'BC08',
+    fullTitle: 'Báo cáo 08 - Tồn kho theo thành phố',
+    description: 'Tổng hợp tồn kho theo thành phố của cửa hàng.',
     filterMode: 'none',
   },
   {
     id: 9,
     path: '/reports/9',
-    shortTitle: 'R09',
-    fullTitle: 'Bao cao 09 - Ton kho theo mat hang',
-    description: 'Tong hop ton kho theo ma mat hang trong cube ton kho.',
+    shortTitle: 'BC09',
+    fullTitle: 'Báo cáo 09 - Tồn kho theo mặt hàng',
+    description: 'Tổng hợp tồn kho theo mã mặt hàng trong cube tồn kho.',
     filterMode: 'none',
   },
 ]
-
-export const DASHBOARD_HIGHLIGHTS = [
-  { label: 'Cube Build', value: '100%', note: 'SSAS da process xong' },
-  { label: 'Report Templates', value: '9/9', note: 'FE da noi API that' },
-  { label: 'Validation Cases', value: '24', note: 'San sang doi chieu OLAP/SQL' },
-] as const
