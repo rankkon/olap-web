@@ -1,6 +1,5 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Text;
-using System.Text.RegularExpressions;
 using DwhOlap.Api.Models;
 using DwhOlap.Api.Options;
 using DwhOlap.Api.Services.Interfaces;
@@ -13,77 +12,14 @@ namespace DwhOlap.Api.Controllers;
 [Route("api/[controller]")]
 public sealed class OlapController : ControllerBase
 {
-    private static readonly IReadOnlyList<AxisLevel> TimeLevels = new[]
-    {
-        new AxisLevel("year", "Năm", "[Dim Thoi Gian].[Nam].[Nam]", "h_time", "H_ThoiGian", 0),
-        new AxisLevel("quarter", "Quý", "[Dim Thoi Gian].[Quy].[Quy]", "h_time", "H_ThoiGian", 1),
-        new AxisLevel("month", "Tháng", "[Dim Thoi Gian].[Thang].[Thang]", "h_time", "H_ThoiGian", 2),
-        new AxisLevel("timeKey", "Mã thời gian", "[Dim Thoi Gian].[Ma Thoi Gian].[Ma Thoi Gian]")
-    };
-
-    private static readonly IReadOnlyDictionary<string, DimensionDefinition> BanHangDimensions =
-        BuildDimensionDictionary(
-            new DimensionDefinition("time", "Thời gian", TimeLevels),
-            new DimensionDefinition(
-                "customer",
-                "Khách hàng",
-                new[]
-                {
-                    new AxisLevel("state", "Bang", "[Dim Khach Hang].[Bang].[Bang]"),
-                    new AxisLevel("city", "Thành phố", "[Dim Khach Hang].[Ten Thanh Pho].[Ten Thanh Pho]"),
-                    new AxisLevel("cityCode", "Mã thành phố", "[Dim Khach Hang].[Ma Thanh Pho].[Ma Thanh Pho]", "h_customer", "Phân cấp", 0),
-                    new AxisLevel("customerName", "Tên khách hàng", "[Dim Khach Hang].[Ten Khach Hang].[Ten Khach Hang]", "h_customer", "Phân cấp", 1),
-                    new AxisLevel("customerCode", "Mã khách hàng", "[Dim Khach Hang].[Ma Khach Hang].[Ma Khach Hang]"),
-                    new AxisLevel("officeAddress", "Địa chỉ văn phòng", "[Dim Khach Hang].[Dia Chi Van Phong].[Dia Chi Van Phong]"),
-                    new AxisLevel("firstOrderDate", "Ngày đặt hàng đầu tiên", "[Dim Khach Hang].[Ngay Dat Hang Dau Tien].[Ngay Dat Hang Dau Tien]")
-                }),
-            new DimensionDefinition(
-                "product",
-                "Mặt hàng",
-                new[]
-                {
-                    new AxisLevel("product", "Mã mặt hàng", "[Dim Mat Hang].[Ma Mat Hang].[Ma Mat Hang]"),
-                    new AxisLevel("size", "Kích cỡ", "[Dim Mat Hang].[Kich Co].[Kich Co]"),
-                    new AxisLevel("weight", "Trọng lượng", "[Dim Mat Hang].[Trong Luong].[Trong Luong]"),
-                    new AxisLevel("price", "Giá", "[Dim Mat Hang].[Gia].[Gia]"),
-                    new AxisLevel("description", "Mô tả", "[Dim Mat Hang].[Mo Ta].[Mo Ta]")
-                }));
-
-    private static readonly IReadOnlyList<string> BanHangDimensionOrder = new[]
+    private static readonly string[] BanHangDimensionOrder =
     {
         "time",
         "customer",
         "product"
     };
 
-    private static readonly IReadOnlyDictionary<string, DimensionDefinition> TonKhoDimensions =
-        BuildDimensionDictionary(
-            new DimensionDefinition("time", "Thời gian", TimeLevels),
-            new DimensionDefinition(
-                "store",
-                "Cửa hàng",
-                new[]
-                {
-                    new AxisLevel("state", "Bang", "[Dim Cua Hang].[Bang].[Bang]", "h_store", "H_DiaLyCuaHang", 0),
-                    new AxisLevel("city", "Thành phố", "[Dim Cua Hang].[Ten Thanh Pho].[Ten Thanh Pho]", "h_store", "H_DiaLyCuaHang", 1),
-                    new AxisLevel("cityCode", "Mã thành phố", "[Dim Cua Hang].[Ma Thanh Pho].[Ma Thanh Pho]"),
-                    new AxisLevel("store", "Mã cửa hàng", "[Dim Cua Hang].[Ma Cua Hang].[Ma Cua Hang]", "h_store", "H_DiaLyCuaHang", 2),
-                    new AxisLevel("officeAddress", "Địa chỉ văn phòng", "[Dim Cua Hang].[Dia Chi Van Phong].[Dia Chi Van Phong]"),
-                    new AxisLevel("phone", "Số điện thoại", "[Dim Cua Hang].[So Dien Thoai].[So Dien Thoai]")
-                }),
-            new DimensionDefinition(
-                "product",
-                "Mặt hàng",
-                new[]
-                {
-                    new AxisLevel("product", "Mã mặt hàng", "[Dim Mat Hang].[Ma Mat Hang].[Ma Mat Hang]"),
-                    new AxisLevel("size", "Kích cỡ", "[Dim Mat Hang].[Kich Co].[Kich Co]"),
-                    new AxisLevel("weight", "Trọng lượng", "[Dim Mat Hang].[Trong Luong].[Trong Luong]"),
-                    new AxisLevel("price", "Giá", "[Dim Mat Hang].[Gia].[Gia]"),
-                    new AxisLevel("description", "Mô tả", "[Dim Mat Hang].[Mo Ta].[Mo Ta]")
-                }));
-
-    private static readonly IReadOnlyList<string> TonKhoDimensionOrder = new[]
+    private static readonly string[] TonKhoDimensionOrder =
     {
         "time",
         "store",
@@ -124,742 +60,509 @@ public sealed class OlapController : ControllerBase
     }
 
     [HttpGet("metadata")]
-    public ActionResult<ApiEnvelope<OlapMetadataResponse>> Metadata()
-    {
-        var options = _optionsMonitor.CurrentValue;
-        var metadata = BuildMetadata(options);
-
-        return Ok(new ApiEnvelope<OlapMetadataResponse>
-        {
-            Success = true,
-            Message = "OLAP metadata fetched.",
-            Data = metadata
-        });
-    }
-
-    [HttpPost("pivot")]
-    public async Task<ActionResult<ApiEnvelope<OlapPivotResponse>>> Pivot(
-        [FromBody] OlapPivotRequest request,
-        CancellationToken cancellationToken)
+    public async Task<ActionResult<ApiEnvelope<OlapMetadataResponse>>> Metadata(CancellationToken cancellationToken)
     {
         try
         {
             var options = _optionsMonitor.CurrentValue;
-            var plan = BuildPlan(request, options);
-            var queryResult = await _ssasQueryService.ExecuteMdxAsync(plan.Cube, plan.Mdx, cancellationToken);
-            var pivot = BuildPivotResponse(plan, queryResult);
+            var metadata = await BuildMetadataFromSsasAsync(options, cancellationToken);
 
-            return Ok(new ApiEnvelope<OlapPivotResponse>
+            return Ok(new ApiEnvelope<OlapMetadataResponse>
             {
                 Success = true,
-                Message = "Pivot query executed.",
-                Data = pivot
+                Message = "OLAP metadata fetched from SSAS.",
+                Data = metadata
             });
         }
-        catch (ArgumentException ex)
+        catch (Exception ex)
         {
-            return BadRequest(new ApiEnvelope<OlapPivotResponse>
+            return StatusCode(StatusCodes.Status500InternalServerError, new ApiEnvelope<OlapMetadataResponse>
             {
                 Success = false,
-                Message = ex.Message
+                Message = $"Failed to fetch OLAP metadata from SSAS: {ex.Message}"
             });
         }
     }
 
-    private static PivotPlan BuildPlan(OlapPivotRequest request, SsasOptions options)
+    private async Task<OlapMetadataResponse> BuildMetadataFromSsasAsync(
+        SsasOptions options,
+        CancellationToken cancellationToken)
     {
-        var measure = ResolveMeasure(request.Measure, options);
-        var dimensionMap = ResolveDimensionDefinitions(measure.CubeType);
-        var availableDimensions = dimensionMap.Keys.ToArray();
+        var cubes = BuildCubeConfigs(options);
+        var result = new List<OlapMeasureMetadata>();
+        var usedMeasureKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        var normalizedRowDimension = NormalizeDimension(request.RowDimension, availableDimensions);
-        var normalizedColumnDimension = NormalizeDimension(request.ColumnDimension, availableDimensions);
-        var normalizedThirdDimension = NormalizeOptionalDimension(request.ThirdDimension, availableDimensions);
-
-        if (normalizedRowDimension == normalizedColumnDimension)
+        foreach (var cube in cubes)
         {
-            throw new ArgumentException("'rowDimension' and 'columnDimension' must be different.");
-        }
-
-        if (!string.IsNullOrWhiteSpace(normalizedThirdDimension)
-            && (normalizedThirdDimension == normalizedRowDimension
-                || normalizedThirdDimension == normalizedColumnDimension))
-        {
-            throw new ArgumentException("'thirdDimension' must be different from row/column dimensions.");
-        }
-
-        var topRows = Math.Clamp(request.TopRows <= 0 ? 25 : request.TopRows, 1, 250);
-        var topColumns = Math.Clamp(request.TopColumns <= 0 ? 12 : request.TopColumns, 1, 48);
-        var yearFilter = request.Year is > 0 ? request.Year : null;
-
-        var rowDefinition = dimensionMap[normalizedRowDimension];
-        var columnDefinition = dimensionMap[normalizedColumnDimension];
-        var thirdDefinition = string.IsNullOrWhiteSpace(normalizedThirdDimension)
-            ? null
-            : dimensionMap[normalizedThirdDimension];
-
-        var requestedRowLevel = ResolveRequestedLevelIndex(
-            normalizedRowDimension,
-            request.RowLevelIndex,
-            request.HierarchyLevel);
-        var requestedColumnLevel = ResolveRequestedLevelIndex(
-            normalizedColumnDimension,
-            request.ColumnLevelIndex,
-            request.HierarchyLevel);
-        var requestedThirdLevel = thirdDefinition is null
-            ? 0
-            : ResolveRequestedLevelIndex(
-                normalizedThirdDimension!,
-                request.ThirdLevelIndex,
-                request.HierarchyLevel);
-
-        var rowAxis = ResolveAxisSet(rowDefinition, requestedRowLevel, topRows);
-        var columnAxis = ResolveAxisSet(
-            columnDefinition,
-            requestedColumnLevel,
-            topColumns,
-            rowAxis.LevelExpression);
-        var thirdAxis = thirdDefinition is null
-            ? null
-            : ResolveAxisSet(
-                thirdDefinition,
-                requestedThirdLevel,
-                topRows,
-                rowAxis.LevelExpression);
-
-        var filters = ResolveFilters(
-            request.Filters ?? Array.Empty<OlapMemberFilter>(),
-            dimensionMap,
-            normalizedRowDimension,
-            rowAxis.LevelIndex,
-            normalizedColumnDimension,
-            columnAxis.LevelIndex,
-            normalizedThirdDimension,
-            thirdAxis?.LevelIndex);
-
-        var rowSetExpression = ApplyAxisFilter(
-            rowAxis,
-            filters.TryGetValue(normalizedRowDimension, out var rowFilter) ? rowFilter : null);
-        var columnSetExpression = ApplyAxisFilter(
-            columnAxis,
-            filters.TryGetValue(normalizedColumnDimension, out var columnFilter) ? columnFilter : null);
-        columnSetExpression = ApplyTopLimit(columnAxis, columnSetExpression, measure.MeasureReference);
-
-        if (thirdAxis is null || string.IsNullOrWhiteSpace(normalizedThirdDimension))
-        {
-            rowSetExpression = ApplyTopLimit(rowAxis, rowSetExpression, measure.MeasureReference, columnSetExpression);
-        }
-        else
-        {
-            var thirdSetExpression = ApplyAxisFilter(
-                thirdAxis,
-                filters.TryGetValue(normalizedThirdDimension, out var thirdFilter) ? thirdFilter : null);
-            thirdSetExpression = ApplyTopLimit(thirdAxis, thirdSetExpression, measure.MeasureReference, columnSetExpression);
-
-            var combinedRows = $"CROSSJOIN({rowSetExpression}, {thirdSetExpression})";
-            var measureSet = $"{{ {measure.MeasureReference} }}";
-            var rowContextSet = $"CROSSJOIN({columnSetExpression}, {measureSet})";
-            rowSetExpression = $"HEAD(NONEMPTY({combinedRows}, {rowContextSet}), {topRows})";
-        }
-
-        var nonAxisFilters = filters.Values
-            .Where(filter =>
-                !string.Equals(filter.Dimension, normalizedRowDimension, StringComparison.OrdinalIgnoreCase)
-                && !string.Equals(filter.Dimension, normalizedColumnDimension, StringComparison.OrdinalIgnoreCase)
-                && (string.IsNullOrWhiteSpace(normalizedThirdDimension)
-                    || !string.Equals(filter.Dimension, normalizedThirdDimension, StringComparison.OrdinalIgnoreCase)))
-            .OrderBy(filter => filter.Dimension, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        var fromExpression = BuildFromExpression(measure.CubeName, nonAxisFilters);
-
-        var whereItems = new List<string> { measure.MeasureReference };
-        if (yearFilter.HasValue && !filters.ContainsKey("time"))
-        {
-            whereItems.Add($"[Dim Thoi Gian].[Nam].&[{yearFilter.Value}]");
-        }
-
-        var withClause = string.IsNullOrWhiteSpace(measure.WithMember) ? string.Empty : $"{measure.WithMember}\n";
-        var mdx = $@"
-{withClause}SELECT
-    NON EMPTY {columnSetExpression} ON COLUMNS,
-    NON EMPTY {rowSetExpression} ON ROWS
-FROM {fromExpression}
-WHERE ( {string.Join(", ", whereItems)} )";
-
-        return new PivotPlan
-        {
-            Cube = measure.CubeName,
-            Measure = request.Measure,
-            RowDimension = normalizedRowDimension,
-            ColumnDimension = normalizedColumnDimension,
-            SecondaryRowDimension = normalizedThirdDimension,
-            RowLevelLabel = rowAxis.LevelLabel,
-            SecondaryRowLevelLabel = thirdAxis?.LevelLabel,
-            ColumnLevelLabel = columnAxis.LevelLabel,
-            Mdx = mdx
-        };
-    }
-
-    private static OlapPivotResponse BuildPivotResponse(PivotPlan plan, QueryResult queryResult)
-    {
-        var secondaryRowHeader = string.IsNullOrWhiteSpace(plan.SecondaryRowDimension)
-            ? null
-            : ToAxisHeaderLabel(plan.SecondaryRowDimension, plan.SecondaryRowLevelLabel ?? string.Empty);
-
-        if (queryResult.Columns.Count == 0)
-        {
-            return new OlapPivotResponse
+            var dimensions = await LoadDimensionsAsync(cube, cancellationToken);
+            if (dimensions.Count == 0)
             {
-                Cube = plan.Cube,
-                Measure = plan.Measure,
-                RowDimension = plan.RowDimension,
-                ColumnDimension = plan.ColumnDimension,
-                RowLevelLabel = plan.RowLevelLabel,
-                ColumnLevelLabel = plan.ColumnLevelLabel,
-                RowHeader = ToAxisHeaderLabel(plan.RowDimension, plan.RowLevelLabel),
-                SecondaryRowHeader = secondaryRowHeader,
-                ColumnHeader = ToAxisHeaderLabel(plan.ColumnDimension, plan.ColumnLevelLabel),
-                Mdx = plan.Mdx
-            };
-        }
-
-        var rowCaptionColumns = queryResult.Columns
-            .Where(column => column.Contains("[MEMBER_CAPTION]", StringComparison.OrdinalIgnoreCase))
-            .ToArray();
-        if (rowCaptionColumns.Length == 0)
-        {
-            rowCaptionColumns = new[] { queryResult.Columns[0] };
-        }
-
-        var valueColumns = queryResult.Columns
-            .Where(column => !rowCaptionColumns.Contains(column, StringComparer.OrdinalIgnoreCase))
-            .ToArray();
-
-        var rows = new List<OlapPivotRow>(queryResult.Rows.Count);
-        decimal total = 0;
-
-        foreach (var sourceRow in queryResult.Rows)
-        {
-            var values = new List<decimal>(valueColumns.Length);
-            foreach (var valueColumn in valueColumns)
-            {
-                sourceRow.TryGetValue(valueColumn, out var rawValue);
-                var parsed = ParseDecimal(rawValue);
-                values.Add(parsed);
-                total += parsed;
+                continue;
             }
 
-            sourceRow.TryGetValue(rowCaptionColumns[0], out var rawLabel);
-            string? secondaryLabel = null;
-            if (!string.IsNullOrWhiteSpace(plan.SecondaryRowDimension) && rowCaptionColumns.Length > 1)
-            {
-                sourceRow.TryGetValue(rowCaptionColumns[1], out var rawSecondaryLabel);
-                secondaryLabel = FormatMemberCaption(
-                    rawSecondaryLabel,
-                    plan.SecondaryRowDimension,
-                    plan.SecondaryRowLevelLabel ?? string.Empty);
-            }
+            var measures = await QuerySchemaAsync(
+                $"SELECT * FROM $SYSTEM.MDSCHEMA_MEASURES WHERE CUBE_NAME = '{EscapeLiteral(cube.CubeName)}'",
+                cancellationToken);
 
-            rows.Add(new OlapPivotRow
+            foreach (var row in measures.Rows)
             {
-                Label = FormatMemberCaption(rawLabel, plan.RowDimension, plan.RowLevelLabel),
-                SecondaryLabel = secondaryLabel,
-                Values = values
-            });
+                if (!IsVisibleMeasure(row))
+                {
+                    continue;
+                }
+
+                var measureUniqueName = GetValue(row, "MEASURE_UNIQUE_NAME");
+                var measureCaption = GetValue(row, "MEASURE_CAPTION", "MEASURE_NAME");
+                if (string.IsNullOrWhiteSpace(measureUniqueName) && string.IsNullOrWhiteSpace(measureCaption))
+                {
+                    continue;
+                }
+
+                var measureExpression = BuildMeasureExpression(measureUniqueName, measureCaption);
+                var measureLabel = string.IsNullOrWhiteSpace(measureCaption)
+                    ? ExtractCaption(measureExpression)
+                    : measureCaption;
+                var key = BuildUniqueMeasureKey(
+                    ResolveMeasureKey(cube.CubeType, measureUniqueName, measureLabel, options),
+                    usedMeasureKeys);
+
+                result.Add(new OlapMeasureMetadata
+                {
+                    Key = key,
+                    Label = measureLabel,
+                    CubeType = cube.CubeType,
+                    CubeName = cube.CubeName,
+                    MeasureExpression = measureExpression,
+                    Dimensions = dimensions
+                });
+            }
         }
 
-        return new OlapPivotResponse
-        {
-            Cube = plan.Cube,
-            Measure = plan.Measure,
-            RowDimension = plan.RowDimension,
-            ColumnDimension = plan.ColumnDimension,
-            RowLevelLabel = plan.RowLevelLabel,
-            ColumnLevelLabel = plan.ColumnLevelLabel,
-            RowHeader = ToAxisHeaderLabel(plan.RowDimension, plan.RowLevelLabel),
-            SecondaryRowHeader = secondaryRowHeader,
-            ColumnHeader = ToAxisHeaderLabel(plan.ColumnDimension, plan.ColumnLevelLabel),
-            ColumnHeaders = valueColumns
-                .Select(raw => FormatMemberCaption(raw, plan.ColumnDimension, plan.ColumnLevelLabel))
-                .ToArray(),
-            Rows = rows,
-            Total = total,
-            Mdx = plan.Mdx
-        };
-    }
-
-    private static OlapMetadataResponse BuildMetadata(SsasOptions options)
-    {
         return new OlapMetadataResponse
         {
-            Measures = new[]
-            {
-                new OlapMeasureMetadata
-                {
-                    Key = "revenue",
-                    Label = "Doanh thu",
-                    CubeType = "banhang",
-                    CubeName = options.CubeBanHang,
-                    MeasureExpression = $"[Measures].[{EscapeMdxName(options.MeasureTongDoanhThu)}]",
-                    Dimensions = BuildDimensionMetadata(BanHangDimensions, BanHangDimensionOrder)
-                },
-                new OlapMeasureMetadata
-                {
-                    Key = "orderCount",
-                    Label = "Số lượng hàng",
-                    CubeType = "banhang",
-                    CubeName = options.CubeBanHang,
-                    MeasureExpression = "[Measures].[So Luong Hang]",
-                    Dimensions = BuildDimensionMetadata(BanHangDimensions, BanHangDimensionOrder)
-                },
-                new OlapMeasureMetadata
-                {
-                    Key = "inventory",
-                    Label = "Số lượng tồn kho",
-                    CubeType = "tonkho",
-                    CubeName = options.CubeTonKho,
-                    MeasureExpression = $"[Measures].[{EscapeMdxName(options.MeasureSoLuongTonKho)}]",
-                    Dimensions = BuildDimensionMetadata(TonKhoDimensions, TonKhoDimensionOrder)
-                }
-            }
+            Measures = result
         };
     }
 
-    private static IReadOnlyList<OlapDimensionMetadata> BuildDimensionMetadata(
-        IReadOnlyDictionary<string, DimensionDefinition> dimensionMap,
-        IReadOnlyList<string> order)
+    private async Task<IReadOnlyList<OlapDimensionMetadata>> LoadDimensionsAsync(
+        CubeConfig cube,
+        CancellationToken cancellationToken)
     {
-        return order
-            .Where(dimensionMap.ContainsKey)
-            .Select(key =>
+        var cubeLiteral = EscapeLiteral(cube.CubeName);
+
+        var dimensionsTask = QuerySchemaAsync(
+            $"SELECT * FROM $SYSTEM.MDSCHEMA_DIMENSIONS WHERE CUBE_NAME = '{cubeLiteral}'",
+            cancellationToken);
+        var hierarchiesTask = QuerySchemaAsync(
+            $"SELECT * FROM $SYSTEM.MDSCHEMA_HIERARCHIES WHERE CUBE_NAME = '{cubeLiteral}'",
+            cancellationToken);
+        var levelsTask = QuerySchemaAsync(
+            $"SELECT * FROM $SYSTEM.MDSCHEMA_LEVELS WHERE CUBE_NAME = '{cubeLiteral}'",
+            cancellationToken);
+
+        await Task.WhenAll(dimensionsTask, hierarchiesTask, levelsTask);
+
+        var dimensionRows = dimensionsTask.Result.Rows;
+        var hierarchyRows = hierarchiesTask.Result.Rows;
+        var levelRows = levelsTask.Result.Rows;
+
+        var buildersByKey = new Dictionary<string, DimensionBuilder>(StringComparer.OrdinalIgnoreCase);
+        var keyByDimensionUniqueName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var row in dimensionRows)
+        {
+            var uniqueName = GetValue(row, "DIMENSION_UNIQUE_NAME", "DIMENSION_NAME");
+            if (string.IsNullOrWhiteSpace(uniqueName)
+                || uniqueName.Contains("[Measures]", StringComparison.OrdinalIgnoreCase))
             {
-                var definition = dimensionMap[key];
-                return new OlapDimensionMetadata
+                continue;
+            }
+
+            var key = MapDimensionKey(
+                cube.CubeType,
+                uniqueName,
+                GetValue(row, "DIMENSION_CAPTION"),
+                GetValue(row, "DIMENSION_NAME"));
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                continue;
+            }
+
+            keyByDimensionUniqueName[uniqueName] = key;
+
+            if (!buildersByKey.ContainsKey(key))
+            {
+                buildersByKey[key] = new DimensionBuilder
                 {
-                    Key = definition.Key,
-                    Label = ToDimensionLabel(definition.Key),
-                    Levels = definition.Levels
-                        .Select(level => new OlapLevelMetadata
-                        {
-                            Key = level.LevelKey,
-                            Label = level.LevelLabel,
-                            LevelExpression = level.LevelExpression,
-                            HierarchyKey = level.HierarchyKey,
-                            HierarchyLabel = level.HierarchyLabel,
-                            HierarchyOrder = level.HierarchyOrder
-                        })
-                        .ToArray()
+                    Key = key,
+                    Label = ToDimensionLabel(key)
                 };
+            }
+        }
+
+        var hierarchyCaptionByUnique = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var row in hierarchyRows)
+        {
+            var unique = GetValue(row, "HIERARCHY_UNIQUE_NAME");
+            if (string.IsNullOrWhiteSpace(unique))
+            {
+                continue;
+            }
+
+            var caption = GetValue(row, "HIERARCHY_CAPTION", "HIERARCHY_NAME");
+            if (string.IsNullOrWhiteSpace(caption))
+            {
+                caption = ExtractCaption(unique);
+            }
+
+            hierarchyCaptionByUnique[unique] = caption;
+        }
+
+        foreach (var row in levelRows)
+        {
+            var dimensionUnique = GetValue(row, "DIMENSION_UNIQUE_NAME");
+            if (string.IsNullOrWhiteSpace(dimensionUnique)
+                || !keyByDimensionUniqueName.TryGetValue(dimensionUnique, out var dimensionKey)
+                || !buildersByKey.TryGetValue(dimensionKey, out var builder))
+            {
+                continue;
+            }
+
+            var levelExpression = GetValue(row, "LEVEL_UNIQUE_NAME");
+            if (string.IsNullOrWhiteSpace(levelExpression)
+                || !builder.SeenLevelExpressions.Add(levelExpression)
+                || IsAllLevel(row, levelExpression))
+            {
+                continue;
+            }
+
+            var hierarchyUnique = GetValue(row, "HIERARCHY_UNIQUE_NAME");
+            var hierarchyLabel = GetValue(row, "HIERARCHY_CAPTION");
+            if (string.IsNullOrWhiteSpace(hierarchyLabel)
+                && !string.IsNullOrWhiteSpace(hierarchyUnique)
+                && hierarchyCaptionByUnique.TryGetValue(hierarchyUnique, out var resolvedHierarchyCaption))
+            {
+                hierarchyLabel = resolvedHierarchyCaption;
+            }
+
+            var levelLabel = GetValue(row, "LEVEL_CAPTION", "LEVEL_NAME");
+            if (string.IsNullOrWhiteSpace(levelLabel))
+            {
+                levelLabel = ExtractCaption(levelExpression);
+            }
+
+            int? hierarchyOrder = null;
+            if (TryParseInt(GetValue(row, "LEVEL_NUMBER"), out var levelNumber))
+            {
+                hierarchyOrder = levelNumber;
+            }
+
+            var levelKey = BuildUniqueLevelKey(levelExpression, levelLabel, builder);
+
+            builder.Levels.Add(new OlapLevelMetadata
+            {
+                Key = levelKey,
+                Label = levelLabel,
+                LevelExpression = levelExpression,
+                HierarchyKey = string.IsNullOrWhiteSpace(hierarchyUnique)
+                    ? null
+                    : hierarchyUnique,
+                HierarchyLabel = string.IsNullOrWhiteSpace(hierarchyLabel)
+                    ? null
+                    : hierarchyLabel,
+                HierarchyOrder = hierarchyOrder
+            });
+        }
+
+        var preferredOrder = cube.CubeType.Equals("tonkho", StringComparison.OrdinalIgnoreCase)
+            ? TonKhoDimensionOrder
+            : BanHangDimensionOrder;
+
+        var orderedDimensionKeys = preferredOrder
+            .Concat(buildersByKey.Keys.Where(key => !preferredOrder.Contains(key, StringComparer.OrdinalIgnoreCase)))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return orderedDimensionKeys
+            .Where(buildersByKey.ContainsKey)
+            .Select(key => buildersByKey[key])
+            .Select(builder => new OlapDimensionMetadata
+            {
+                Key = builder.Key,
+                Label = builder.Label,
+                Levels = builder.Levels
+                    .OrderBy(level => level.HierarchyKey ?? "~", StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(level => level.HierarchyOrder ?? int.MaxValue)
+                    .ThenBy(level => level.Label, StringComparer.OrdinalIgnoreCase)
+                    .ToArray()
             })
+            .Where(dimension => dimension.Levels.Count > 0)
             .ToArray();
     }
 
-    private static string ParseAxisCaption(string raw)
+    private async Task<QueryResult> QuerySchemaAsync(string commandText, CancellationToken cancellationToken)
     {
-        var keys = Regex.Matches(raw, @"&\[([^\]]+)\]");
-        if (keys.Count > 0)
-        {
-            return keys[^1].Groups[1].Value;
-        }
-
-        var members = Regex.Matches(raw, @"\[([^\]]+)\]");
-        if (members.Count == 0)
-        {
-            return raw;
-        }
-
-        var value = members[^1].Groups[1].Value;
-        if (string.Equals(value, "MEMBER_CAPTION", StringComparison.OrdinalIgnoreCase) && members.Count >= 2)
-        {
-            return members[^2].Groups[1].Value;
-        }
-
-        return value;
+        return await _ssasQueryService.ExecuteCommandAsync(commandText, cancellationToken);
     }
 
-    private static string[] ParseAxisKeys(string raw)
+    private static IReadOnlyList<CubeConfig> BuildCubeConfigs(SsasOptions options)
     {
-        return Regex.Matches(raw, @"&\[([^\]]+)\]")
-            .Select(match => match.Groups[1].Value)
+        var cubes = new List<CubeConfig>();
+
+        if (!string.IsNullOrWhiteSpace(options.CubeBanHang))
+        {
+            cubes.Add(new CubeConfig(options.CubeBanHang.Trim(), "banhang"));
+        }
+
+        if (!string.IsNullOrWhiteSpace(options.CubeTonKho))
+        {
+            cubes.Add(new CubeConfig(options.CubeTonKho.Trim(), "tonkho"));
+        }
+
+        return cubes
+            .GroupBy(cube => cube.CubeName, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
             .ToArray();
     }
 
-    private static string FormatMemberCaption(string? raw, string dimension, string levelLabel)
+    private static string BuildMeasureExpression(string? measureUniqueName, string? measureCaption)
     {
-        var safeRaw = raw ?? string.Empty;
-        var keys = ParseAxisKeys(safeRaw);
-        var caption = ParseAxisCaption(safeRaw).Trim();
-        if (string.IsNullOrWhiteSpace(caption))
+        if (!string.IsNullOrWhiteSpace(measureUniqueName)
+            && measureUniqueName.StartsWith("[", StringComparison.Ordinal))
         {
-            return "-";
+            return measureUniqueName;
         }
 
-        if (!dimension.Equals("time", StringComparison.OrdinalIgnoreCase))
-        {
-            return caption;
-        }
-
-        var normalizedLevelLabel = RemoveDiacritics(levelLabel).ToLowerInvariant();
-        if (normalizedLevelLabel == "quy")
-        {
-            if (keys.Length >= 2)
-            {
-                return $"{keys[^2]} - Q{keys[^1]}";
-            }
-
-            return caption.StartsWith("Q", StringComparison.OrdinalIgnoreCase) ? caption.ToUpperInvariant() : $"Q{caption}";
-        }
-
-        if (normalizedLevelLabel == "thang")
-        {
-            if (keys.Length >= 2)
-            {
-                return $"{keys[^2]} - Tháng {keys[^1]}";
-            }
-
-            return caption.StartsWith("Tháng ", StringComparison.OrdinalIgnoreCase) ? caption : $"Tháng {caption}";
-        }
-
-        if (normalizedLevelLabel == "nam" && keys.Length >= 1)
-        {
-            return keys[^1];
-        }
-
-        return caption;
+        var caption = string.IsNullOrWhiteSpace(measureCaption) ? "Unknown Measure" : measureCaption;
+        return $"[Measures].[{EscapeMdxName(caption)}]";
     }
 
-    private static decimal ParseDecimal(string? value)
+    private static bool IsVisibleMeasure(IReadOnlyDictionary<string, string> row)
     {
-        if (string.IsNullOrWhiteSpace(value))
+        var raw = GetValue(row, "MEASURE_IS_VISIBLE");
+        if (string.IsNullOrWhiteSpace(raw))
         {
-            return 0;
+            return true;
         }
 
-        if (decimal.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out var invariant))
+        if (TryParseBool(raw, out var parsed))
         {
-            return invariant;
-        }
-
-        if (decimal.TryParse(value, NumberStyles.Any, CultureInfo.GetCultureInfo("vi-VN"), out var vi))
-        {
-            return vi;
-        }
-
-        return 0;
-    }
-
-    private static string NormalizeDimension(string? value, IReadOnlyCollection<string> supportedDimensions)
-    {
-        var normalized = value?.Trim().ToLowerInvariant();
-        if (string.IsNullOrWhiteSpace(normalized))
-        {
-            throw new ArgumentException($"Dimension is required. Supported dimensions: {string.Join(", ", supportedDimensions)}.");
-        }
-
-        if (!supportedDimensions.Contains(normalized, StringComparer.OrdinalIgnoreCase))
-        {
-            throw new ArgumentException($"Dimension '{value}' is not available for this measure.");
-        }
-
-        return normalized;
-    }
-
-    private static string? NormalizeOptionalDimension(string? value, IReadOnlyCollection<string> supportedDimensions)
-    {
-        var normalized = value?.Trim().ToLowerInvariant();
-        if (string.IsNullOrWhiteSpace(normalized))
-        {
-            return null;
-        }
-
-        if (!supportedDimensions.Contains(normalized, StringComparer.OrdinalIgnoreCase))
-        {
-            throw new ArgumentException($"Dimension '{value}' is not available for this measure.");
-        }
-
-        return normalized;
-    }
-
-    private static MeasurePlan ResolveMeasure(string? measure, SsasOptions options)
-    {
-        var normalized = measure?.Trim().ToLowerInvariant();
-        return normalized switch
-        {
-            "revenue" => new MeasurePlan
-            {
-                CubeName = options.CubeBanHang,
-                CubeType = "banhang",
-                MeasureReference = $"[Measures].[{EscapeMdxName(options.MeasureTongDoanhThu)}]"
-            },
-            "ordercount" => new MeasurePlan
-            {
-                CubeName = options.CubeBanHang,
-                CubeType = "banhang",
-                MeasureReference = "[Measures].[So Luong Hang]"
-            },
-            "inventory" => new MeasurePlan
-            {
-                CubeName = options.CubeTonKho,
-                CubeType = "tonkho",
-                MeasureReference = $"[Measures].[{EscapeMdxName(options.MeasureSoLuongTonKho)}]"
-            },
-            _ => throw new ArgumentException("Measure must be one of: revenue, orderCount, inventory.")
-        };
-    }
-
-    private static IReadOnlyDictionary<string, DimensionDefinition> ResolveDimensionDefinitions(string cubeType)
-    {
-        return cubeType switch
-        {
-            "banhang" => BanHangDimensions,
-            "tonkho" => TonKhoDimensions,
-            _ => throw new ArgumentException("Unsupported cube type.")
-        };
-    }
-
-    private static AxisSelection ResolveAxisSet(
-        DimensionDefinition definition,
-        int requestedLevelIndex,
-        int top,
-        string? avoidLevelExpression = null)
-    {
-        var levels = definition.Levels;
-        if (levels.Count == 0)
-        {
-            throw new ArgumentException($"No hierarchy level is configured for dimension '{definition.Key}'.");
-        }
-
-        var normalizedIndex = Math.Clamp(requestedLevelIndex, 0, levels.Count - 1);
-        var orderedIndices = Enumerable.Range(0, levels.Count)
-            .OrderBy(index => Math.Abs(index - normalizedIndex))
-            .ThenBy(index => index)
-            .ToArray();
-
-        foreach (var index in orderedIndices)
-        {
-            var level = levels[index];
-            if (!string.IsNullOrWhiteSpace(avoidLevelExpression)
-                && string.Equals(level.LevelExpression, avoidLevelExpression, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            var membersSet = $"{level.LevelExpression}.MEMBERS";
-            var shouldLimit = ShouldLimitMembers(definition.Key, level.LevelKey);
-
-            return new AxisSelection
-            {
-                Dimension = definition.Key,
-                LevelIndex = index,
-                LevelKey = level.LevelKey,
-                LevelLabel = level.LevelLabel,
-                LevelExpression = level.LevelExpression,
-                MembersSetExpression = membersSet,
-                ShouldLimit = shouldLimit,
-                Top = top
-            };
-        }
-
-        throw new ArgumentException(
-            "Selected row/column level combination is not supported because both axes point to the same hierarchy.");
-    }
-
-    private static IReadOnlyDictionary<string, FilterSelection> ResolveFilters(
-        IReadOnlyList<OlapMemberFilter> requestedFilters,
-        IReadOnlyDictionary<string, DimensionDefinition> dimensionMap,
-        string rowDimension,
-        int rowLevelIndex,
-        string columnDimension,
-        int columnLevelIndex,
-        string? thirdDimension = null,
-        int? thirdLevelIndex = null)
-    {
-        var resolved = new Dictionary<string, FilterSelection>(StringComparer.OrdinalIgnoreCase);
-        var supportedDimensions = dimensionMap.Keys.ToArray();
-
-        foreach (var item in requestedFilters)
-        {
-            var members = (item.Members ?? Array.Empty<string>())
-                .Where(member => !string.IsNullOrWhiteSpace(member))
-                .Select(member => member.Trim())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-
-            if (members.Length == 0)
-            {
-                continue;
-            }
-
-            var dimension = NormalizeDimension(item.Dimension, supportedDimensions);
-            var definition = dimensionMap[dimension];
-
-            var resolvedLevelIndex = dimension switch
-            {
-                var d when d.Equals(rowDimension, StringComparison.OrdinalIgnoreCase) => rowLevelIndex,
-                var d when d.Equals(columnDimension, StringComparison.OrdinalIgnoreCase) => columnLevelIndex,
-                var d when !string.IsNullOrWhiteSpace(thirdDimension)
-                    && d.Equals(thirdDimension, StringComparison.OrdinalIgnoreCase) => thirdLevelIndex ?? rowLevelIndex,
-                _ => Math.Clamp(item.LevelIndex ?? definition.Levels.Count - 1, 0, definition.Levels.Count - 1)
-            };
-            var level = definition.Levels[resolvedLevelIndex];
-
-            if (resolved.TryGetValue(dimension, out var existing))
-            {
-                if (existing.LevelIndex != resolvedLevelIndex)
-                {
-                    throw new ArgumentException(
-                        $"Filter '{dimension}' has conflicting level indexes in the same request.");
-                }
-
-                var mergedMembers = existing.Members
-                    .Concat(members)
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToArray();
-
-                resolved[dimension] = existing with
-                {
-                    Members = mergedMembers,
-                    MemberSetExpression = BuildMemberSetExpression(level.MemberPrefix, mergedMembers)
-                };
-                continue;
-            }
-
-            resolved[dimension] = new FilterSelection(
-                dimension,
-                resolvedLevelIndex,
-                level.LevelLabel,
-                level.MemberPrefix,
-                members,
-                BuildMemberSetExpression(level.MemberPrefix, members));
-        }
-
-        return resolved;
-    }
-
-    private static string ApplyAxisFilter(AxisSelection axis, FilterSelection? filter)
-    {
-        return filter is null
-            ? axis.MembersSetExpression
-            : $"INTERSECT({filter.MemberSetExpression}, {axis.MembersSetExpression})";
-    }
-
-    private static string ApplyTopLimit(
-        AxisSelection axis,
-        string baseSetExpression,
-        string measureReference,
-        string? contextSetExpression = null)
-    {
-        if (!axis.ShouldLimit)
-        {
-            return baseSetExpression;
-        }
-
-        if (string.IsNullOrWhiteSpace(contextSetExpression))
-        {
-            return $"HEAD(NONEMPTY({baseSetExpression}, {{ {measureReference} }}), {axis.Top})";
-        }
-
-        var measureSet = $"{{ {measureReference} }}";
-        var contextAwareSet = $"CROSSJOIN({contextSetExpression}, {measureSet})";
-
-        return $"HEAD(NONEMPTY({baseSetExpression}, {contextAwareSet}), {axis.Top})";
-    }
-
-    private static string BuildFromExpression(string cubeName, IReadOnlyList<FilterSelection> nonAxisFilters)
-    {
-        var fromExpression = $"[{EscapeMdxName(cubeName)}]";
-
-        foreach (var filter in nonAxisFilters)
-        {
-            fromExpression = $"( SELECT {filter.MemberSetExpression} ON 0 FROM {fromExpression} )";
-        }
-
-        return fromExpression;
-    }
-
-    private static string BuildMemberSetExpression(string memberPrefix, IReadOnlyList<string> members)
-    {
-        var memberExpressions = members
-            .Select(member => ToMdxMemberExpression(memberPrefix, member))
-            .ToArray();
-
-        return $"{{ {string.Join(", ", memberExpressions)} }}";
-    }
-
-    private static string ToMdxMemberExpression(string memberPrefix, string member)
-    {
-        var normalizedMember = member.Trim();
-        if (IsMemberExpression(normalizedMember))
-        {
-            return normalizedMember;
-        }
-
-        return $"{memberPrefix}.&[{EscapeMdxMemberKey(normalizedMember)}]";
-    }
-
-    private static bool IsMemberExpression(string member)
-    {
-        return member.StartsWith("[", StringComparison.Ordinal)
-            && member.Contains("].&[", StringComparison.Ordinal);
-    }
-
-    private static bool ShouldLimitMembers(string dimension, string levelKey)
-    {
-        if (dimension == "time" && levelKey is "quarter" or "month")
-        {
-            return false;
+            return parsed;
         }
 
         return true;
     }
 
-    private static int ResolveRequestedLevelIndex(string dimension, int? explicitLevelIndex, string? legacyHierarchyLevel)
+    private static string ResolveMeasureKey(
+        string cubeType,
+        string? measureUniqueName,
+        string measureLabel,
+        SsasOptions options)
     {
-        if (explicitLevelIndex.HasValue)
+        var normalized = NormalizeText($"{measureUniqueName} {measureLabel}");
+
+        if (cubeType.Equals("banhang", StringComparison.OrdinalIgnoreCase))
         {
-            return explicitLevelIndex.Value;
+            var normalizedRevenueName = NormalizeText(options.MeasureTongDoanhThu);
+            if (!string.IsNullOrWhiteSpace(normalizedRevenueName)
+                && normalized.Contains(normalizedRevenueName, StringComparison.Ordinal))
+            {
+                return "revenue";
+            }
+
+            if (normalized.Contains("so luong hang", StringComparison.Ordinal)
+                || normalized.Contains("quantity", StringComparison.Ordinal))
+            {
+                return "orderCount";
+            }
         }
 
-        if (dimension == "time")
+        if (cubeType.Equals("tonkho", StringComparison.OrdinalIgnoreCase))
         {
-            return LegacyTimeLevelToIndex(legacyHierarchyLevel);
+            var normalizedInventoryName = NormalizeText(options.MeasureSoLuongTonKho);
+            if (!string.IsNullOrWhiteSpace(normalizedInventoryName)
+                && normalized.Contains(normalizedInventoryName, StringComparison.Ordinal))
+            {
+                return "inventory";
+            }
         }
 
-        // Default non-time axes to the most detailed level.
-        return int.MaxValue;
+        var slug = ToSlug(measureLabel);
+        return string.IsNullOrWhiteSpace(slug) ? $"{cubeType}_measure" : slug;
     }
 
-    private static int LegacyTimeLevelToIndex(string? legacyHierarchyLevel)
+    private static string BuildUniqueMeasureKey(string baseKey, ISet<string> usedKeys)
     {
-        var normalized = legacyHierarchyLevel?.Trim().ToLowerInvariant();
-        return normalized switch
+        var seed = string.IsNullOrWhiteSpace(baseKey) ? "measure" : baseKey;
+        var key = seed;
+        var suffix = 2;
+
+        while (!usedKeys.Add(key))
         {
-            "year" => 0,
-            "quarter" => 1,
-            "month" => 2,
-            _ => 1
+            key = $"{seed}_{suffix}";
+            suffix++;
+        }
+
+        return key;
+    }
+
+    private static string BuildUniqueLevelKey(string levelExpression, string levelLabel, DimensionBuilder builder)
+    {
+        var seed = ToSlug(levelLabel);
+        if (string.IsNullOrWhiteSpace(seed))
+        {
+            seed = ToSlug(ExtractCaption(levelExpression));
+        }
+
+        if (string.IsNullOrWhiteSpace(seed))
+        {
+            seed = "level";
+        }
+
+        var key = seed;
+        var suffix = 2;
+
+        while (builder.SeenLevelKeys.Contains(key))
+        {
+            key = $"{seed}_{suffix}";
+            suffix++;
+        }
+
+        builder.SeenLevelKeys.Add(key);
+        return key;
+    }
+
+    private static bool IsAllLevel(IReadOnlyDictionary<string, string> row, string levelExpression)
+    {
+        if (TryParseInt(GetValue(row, "LEVEL_TYPE"), out var levelType) && levelType == 1)
+        {
+            return true;
+        }
+
+        var caption = GetValue(row, "LEVEL_CAPTION", "LEVEL_NAME");
+        var normalizedCaption = NormalizeText(caption);
+        if (normalizedCaption is "all" or "(all)")
+        {
+            return true;
+        }
+
+        return levelExpression.Contains("[(All)]", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? MapDimensionKey(
+        string cubeType,
+        string dimensionUniqueName,
+        string dimensionCaption,
+        string dimensionName)
+    {
+        var normalized = NormalizeText($"{dimensionUniqueName} {dimensionCaption} {dimensionName}");
+
+        if (normalized.Contains("thoi gian", StringComparison.Ordinal)
+            || normalized.Contains("time", StringComparison.Ordinal))
+        {
+            return "time";
+        }
+
+        if (normalized.Contains("mat hang", StringComparison.Ordinal)
+            || normalized.Contains("item", StringComparison.Ordinal)
+            || normalized.Contains("product", StringComparison.Ordinal))
+        {
+            return "product";
+        }
+
+        if (cubeType.Equals("banhang", StringComparison.OrdinalIgnoreCase)
+            && (normalized.Contains("khach hang", StringComparison.Ordinal)
+                || normalized.Contains("customer", StringComparison.Ordinal)))
+        {
+            return "customer";
+        }
+
+        if (cubeType.Equals("tonkho", StringComparison.OrdinalIgnoreCase)
+            && (normalized.Contains("cua hang", StringComparison.Ordinal)
+                || normalized.Contains("store", StringComparison.Ordinal)))
+        {
+            return "store";
+        }
+
+        if (normalized.Contains("khach hang", StringComparison.Ordinal)
+            || normalized.Contains("customer", StringComparison.Ordinal))
+        {
+            return "customer";
+        }
+
+        if (normalized.Contains("cua hang", StringComparison.Ordinal)
+            || normalized.Contains("store", StringComparison.Ordinal))
+        {
+            return "store";
+        }
+
+        return null;
+    }
+
+    private static string ToDimensionLabel(string key)
+    {
+        return key switch
+        {
+            "time" => "Thoi gian",
+            "store" => "Cua hang",
+            "product" => "Mat hang",
+            "customer" => "Khach hang",
+            _ => "Chieu du lieu"
         };
     }
 
-    private static string ToAxisHeaderLabel(string dimension, string levelLabel)
+    private static string GetValue(IReadOnlyDictionary<string, string> row, params string[] keys)
     {
-        var dimensionLabel = ToDimensionLabel(dimension);
-        return string.IsNullOrWhiteSpace(levelLabel) ? dimensionLabel : $"{dimensionLabel} ({levelLabel})";
-    }
-
-    private static string ToDimensionLabel(string dimension)
-    {
-        return dimension switch
+        foreach (var key in keys)
         {
-            "time" => "Thời gian",
-            "store" => "Cửa hàng",
-            "product" => "Mặt hàng",
-            "customer" => "Khách hàng",
-            _ => "Chiều dữ liệu"
-        };
+            if (row.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
+            {
+                return value.Trim();
+            }
+        }
+
+        return string.Empty;
     }
 
-    private static string RemoveDiacritics(string value)
+    private static string ExtractCaption(string uniqueName)
+    {
+        if (string.IsNullOrWhiteSpace(uniqueName))
+        {
+            return string.Empty;
+        }
+
+        var tokens = uniqueName
+            .Split('[', ']', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(token => !string.IsNullOrWhiteSpace(token))
+            .ToArray();
+
+        return tokens.Length == 0 ? uniqueName : tokens[^1];
+    }
+
+    private static bool TryParseBool(string value, out bool result)
+    {
+        var trimmed = value.Trim();
+        if (bool.TryParse(trimmed, out result))
+        {
+            return true;
+        }
+
+        if (int.TryParse(trimmed, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number))
+        {
+            result = number != 0;
+            return true;
+        }
+
+        result = false;
+        return false;
+    }
+
+    private static bool TryParseInt(string value, out int result)
+    {
+        return int.TryParse(value?.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out result);
+    }
+
+    private static string NormalizeText(string value)
     {
         if (string.IsNullOrWhiteSpace(value))
         {
@@ -868,17 +571,60 @@ WHERE ( {string.Join(", ", whereItems)} )";
 
         var normalized = value.Normalize(NormalizationForm.FormD);
         var builder = new StringBuilder(normalized.Length);
+
         foreach (var c in normalized)
         {
-            if (CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.NonSpacingMark)
+            if (CharUnicodeInfo.GetUnicodeCategory(c) == UnicodeCategory.NonSpacingMark)
             {
-                builder.Append(c);
+                continue;
             }
+
+            builder.Append(char.ToLowerInvariant(c));
         }
 
         return builder
             .ToString()
-            .Normalize(NormalizationForm.FormC);
+            .Normalize(NormalizationForm.FormC)
+            .Replace('đ', 'd');
+    }
+
+    private static string ToSlug(string value)
+    {
+        var normalized = NormalizeText(value);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return string.Empty;
+        }
+
+        var builder = new StringBuilder(normalized.Length);
+        var previousWasUnderscore = false;
+
+        foreach (var c in normalized)
+        {
+            if (char.IsLetterOrDigit(c))
+            {
+                builder.Append(c);
+                previousWasUnderscore = false;
+                continue;
+            }
+
+            if (previousWasUnderscore)
+            {
+                continue;
+            }
+
+            builder.Append('_');
+            previousWasUnderscore = true;
+        }
+
+        return builder
+            .ToString()
+            .Trim('_');
+    }
+
+    private static string EscapeLiteral(string value)
+    {
+        return value.Replace("'", "''", StringComparison.Ordinal);
     }
 
     private static string EscapeMdxName(string value)
@@ -886,131 +632,18 @@ WHERE ( {string.Join(", ", whereItems)} )";
         return value.Replace("]", "]]", StringComparison.Ordinal);
     }
 
-    private static string EscapeMdxMemberKey(string value)
+    private sealed record CubeConfig(string CubeName, string CubeType);
+
+    private sealed class DimensionBuilder
     {
-        return value.Replace("]", "]]", StringComparison.Ordinal);
+        public string Key { get; init; } = string.Empty;
+
+        public string Label { get; init; } = string.Empty;
+
+        public List<OlapLevelMetadata> Levels { get; } = new();
+
+        public HashSet<string> SeenLevelExpressions { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public HashSet<string> SeenLevelKeys { get; } = new(StringComparer.OrdinalIgnoreCase);
     }
-
-    private static IReadOnlyDictionary<string, DimensionDefinition> BuildDimensionDictionary(
-        params DimensionDefinition[] definitions)
-    {
-        return definitions.ToDictionary(item => item.Key, item => item, StringComparer.OrdinalIgnoreCase);
-    }
-
-    private sealed class PivotPlan
-    {
-        public string Cube { get; init; } = string.Empty;
-
-        public string Measure { get; init; } = string.Empty;
-
-        public string RowDimension { get; init; } = string.Empty;
-
-        public string ColumnDimension { get; init; } = string.Empty;
-
-        public string? SecondaryRowDimension { get; init; }
-
-        public string RowLevelLabel { get; init; } = string.Empty;
-
-        public string? SecondaryRowLevelLabel { get; init; }
-
-        public string ColumnLevelLabel { get; init; } = string.Empty;
-
-        public string Mdx { get; init; } = string.Empty;
-    }
-
-    private sealed class MeasurePlan
-    {
-        public string CubeName { get; init; } = string.Empty;
-
-        public string CubeType { get; init; } = string.Empty;
-
-        public string MeasureReference { get; init; } = string.Empty;
-
-        public string? WithMember { get; init; }
-    }
-
-    private sealed class DimensionDefinition
-    {
-        public DimensionDefinition(string key, string label, IReadOnlyList<AxisLevel> levels)
-        {
-            Key = key;
-            Label = label;
-            Levels = levels;
-        }
-
-        public string Key { get; }
-
-        public string Label { get; }
-
-        public IReadOnlyList<AxisLevel> Levels { get; }
-    }
-
-    private sealed class AxisLevel
-    {
-        private static readonly Regex LevelExpressionPattern = new(@"^(.*)\.\[[^\]]+\]$", RegexOptions.Compiled);
-
-        public AxisLevel(
-            string levelKey,
-            string levelLabel,
-            string levelExpression,
-            string? hierarchyKey = null,
-            string? hierarchyLabel = null,
-            int? hierarchyOrder = null)
-        {
-            LevelKey = levelKey;
-            LevelLabel = levelLabel;
-            LevelExpression = levelExpression;
-            HierarchyKey = hierarchyKey;
-            HierarchyLabel = hierarchyLabel;
-            HierarchyOrder = hierarchyOrder;
-            MemberPrefix = ResolveMemberPrefix(levelExpression);
-        }
-
-        public string LevelKey { get; }
-
-        public string LevelLabel { get; }
-
-        public string LevelExpression { get; }
-
-        public string? HierarchyKey { get; }
-
-        public string? HierarchyLabel { get; }
-
-        public int? HierarchyOrder { get; }
-
-        public string MemberPrefix { get; }
-
-        private static string ResolveMemberPrefix(string levelExpression)
-        {
-            var match = LevelExpressionPattern.Match(levelExpression);
-            return match.Success ? match.Groups[1].Value : levelExpression;
-        }
-    }
-
-    private sealed class AxisSelection
-    {
-        public string Dimension { get; init; } = string.Empty;
-
-        public int LevelIndex { get; init; }
-
-        public string LevelKey { get; init; } = string.Empty;
-
-        public string LevelLabel { get; init; } = string.Empty;
-
-        public string LevelExpression { get; init; } = string.Empty;
-
-        public string MembersSetExpression { get; init; } = string.Empty;
-
-        public bool ShouldLimit { get; init; }
-
-        public int Top { get; init; }
-    }
-
-    private sealed record FilterSelection(
-        string Dimension,
-        int LevelIndex,
-        string LevelLabel,
-        string MemberPrefix,
-        IReadOnlyList<string> Members,
-        string MemberSetExpression);
 }

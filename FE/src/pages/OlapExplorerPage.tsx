@@ -57,6 +57,12 @@ interface MemberColumns {
   uniqueColumn: string
 }
 
+interface LevelResultColumns {
+  level: SelectedLevel
+  captionColumn: string
+  uniqueColumn: string
+}
+
 const EMPTY_TABLE: DisplayTable = {
   columns: [],
   rows: [],
@@ -162,15 +168,25 @@ function formatMeasureValue(value: string): string {
   return formatNumber(parsed)
 }
 
+function normalizeLevelToken(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .trim()
+}
+
 function formatTimeCaption(level: SelectedLevel, captionRaw: string, uniqueRaw: string): string {
   const caption = captionRaw.trim() || parseMemberCaption(uniqueRaw)
   const keys = parseMemberKeys(uniqueRaw)
+  const normalizedLevel = normalizeLevelToken(`${level.levelLabel} ${level.levelKey}`)
 
-  if (level.levelKey === 'year') {
+  if (normalizedLevel.includes('nam') || level.levelKey === 'year') {
     return keys[keys.length - 1] ?? caption
   }
 
-  if (level.levelKey === 'quarter') {
+  if (normalizedLevel.includes('quy') || level.levelKey === 'quarter') {
     if (keys.length >= 2) {
       return `${keys[keys.length - 2]} - Q${keys[keys.length - 1]}`
     }
@@ -178,7 +194,7 @@ function formatTimeCaption(level: SelectedLevel, captionRaw: string, uniqueRaw: 
     return caption.startsWith('Q') ? caption.toUpperCase() : `Q${caption}`
   }
 
-  if (level.levelKey === 'month') {
+  if (normalizedLevel.includes('thang') || level.levelKey === 'month') {
     if (keys.length >= 2) {
       return `${keys[keys.length - 2]} - Thang ${keys[keys.length - 1]}`
     }
@@ -197,14 +213,82 @@ function formatLevelCell(level: SelectedLevel, captionRaw: string, uniqueRaw: st
   return formatTimeCaption(level, captionRaw, uniqueRaw)
 }
 
-function resolveMemberColumns(columns: string[]): MemberColumns {
+function findColumnIgnoreCase(columns: string[], expected: string): string | undefined {
+  const expectedKey = expected.trim().toLowerCase()
+  return columns.find((column) => column.trim().toLowerCase() === expectedKey)
+}
+
+function resolveMemberColumns(columns: string[], levelExpression?: string): MemberColumns {
   const firstColumn = columns[0] ?? ''
-  const captionColumn = columns.find((column) => column.includes('[MEMBER_CAPTION]')) ?? firstColumn
-  const uniqueColumn = columns.find((column) => column.includes('[MEMBER_UNIQUE_NAME]')) ?? captionColumn
+  const captionCandidates = columns.filter((column) => column.includes('[MEMBER_CAPTION]'))
+  const uniqueCandidates = columns.filter((column) => column.includes('[MEMBER_UNIQUE_NAME]'))
+
+  let captionColumn = captionCandidates[0] ?? firstColumn
+  let uniqueColumn = uniqueCandidates[0] ?? captionColumn
+
+  if (levelExpression) {
+    const expectedCaption = `${levelExpression}.[MEMBER_CAPTION]`
+    const expectedUnique = `${levelExpression}.[MEMBER_UNIQUE_NAME]`
+    const matchedCaption = findColumnIgnoreCase(captionCandidates, expectedCaption)
+    const matchedUnique = findColumnIgnoreCase(uniqueCandidates, expectedUnique)
+
+    if (matchedCaption) {
+      captionColumn = matchedCaption
+    }
+
+    if (matchedUnique) {
+      uniqueColumn = matchedUnique
+    } else if (matchedCaption) {
+      const inferredUnique = matchedCaption.replace('[MEMBER_CAPTION]', '[MEMBER_UNIQUE_NAME]')
+      uniqueColumn = findColumnIgnoreCase(uniqueCandidates, inferredUnique) ?? uniqueColumn
+    }
+  }
+
   return {
     captionColumn,
     uniqueColumn,
   }
+}
+
+function resolveResultLevelColumns(columns: string[], selectedLevels: SelectedLevel[]): LevelResultColumns[] {
+  const captionCandidates = columns.filter((column) => column.includes('[MEMBER_CAPTION]'))
+  const uniqueCandidates = columns.filter((column) => column.includes('[MEMBER_UNIQUE_NAME]'))
+  const usedCaptionColumns = new Set<string>()
+  const usedUniqueColumns = new Set<string>()
+
+  const pickNextUnused = (candidates: string[], used: Set<string>) => {
+    return candidates.find((column) => !used.has(column))
+  }
+
+  return selectedLevels.map((level) => {
+    const expectedCaption = `${level.levelExpression}.[MEMBER_CAPTION]`
+    const expectedUnique = `${level.levelExpression}.[MEMBER_UNIQUE_NAME]`
+
+    const captionColumn = findColumnIgnoreCase(captionCandidates, expectedCaption)
+      ?? pickNextUnused(captionCandidates, usedCaptionColumns)
+      ?? ''
+    if (captionColumn) {
+      usedCaptionColumns.add(captionColumn)
+    }
+
+    let uniqueColumn = findColumnIgnoreCase(uniqueCandidates, expectedUnique)
+    if (!uniqueColumn && captionColumn) {
+      const inferredUnique = captionColumn.replace('[MEMBER_CAPTION]', '[MEMBER_UNIQUE_NAME]')
+      uniqueColumn = findColumnIgnoreCase(uniqueCandidates, inferredUnique)
+    }
+    uniqueColumn = uniqueColumn
+      ?? pickNextUnused(uniqueCandidates, usedUniqueColumns)
+      ?? ''
+    if (uniqueColumn) {
+      usedUniqueColumns.add(uniqueColumn)
+    }
+
+    return {
+      level,
+      captionColumn,
+      uniqueColumn,
+    }
+  })
 }
 
 function membersQuery(cubeName: string, levelExpression: string): string {
@@ -228,7 +312,7 @@ function toMemberOptions(result: QueryResultDto, level: SelectedLevel): SelectOp
     return []
   }
 
-  const { captionColumn, uniqueColumn } = resolveMemberColumns(result.columns)
+  const { captionColumn, uniqueColumn } = resolveMemberColumns(result.columns, level.levelExpression)
   const seen = new Set<string>()
   const options: SelectOption[] = []
 
@@ -368,7 +452,7 @@ function normalizeFlatTable(
   selectedLevels: SelectedLevel[],
   measureLabels: string[],
 ): DisplayTable {
-  const captionColumns = result.columns.filter((column) => column.includes('[MEMBER_CAPTION]'))
+  const levelColumns = resolveResultLevelColumns(result.columns, selectedLevels)
   const uniqueColumns = new Set(result.columns.filter((column) => column.includes('[MEMBER_UNIQUE_NAME]')))
   const valueColumns = result.columns.filter(
     (column) => !column.includes('[MEMBER_CAPTION]') && !column.includes('[MEMBER_UNIQUE_NAME]'),
@@ -402,18 +486,11 @@ function normalizeFlatTable(
     }
   }
 
-  const columns: TableColumn[] = []
-
-  captionColumns.forEach((_, index) => {
-    const selectedLevel = selectedLevels[index]
-    columns.push({
-      key: `level_${index}`,
-      label: selectedLevel
-        ? selectedLevel.levelLabel
-        : `Chiều ${index + 1}`,
-      align: 'center',
-    })
-  })
+  const columns: TableColumn[] = selectedLevels.map((selectedLevel, index) => ({
+    key: `level_${index}`,
+    label: selectedLevel.levelLabel,
+    align: 'center',
+  }))
 
   valueColumns.forEach((_column, index) => {
     columns.push({
@@ -427,15 +504,10 @@ function normalizeFlatTable(
   const rows: TableRow[] = result.rows.map((sourceRow) => {
     const targetRow: TableRow = {}
 
-    captionColumns.forEach((captionColumn, index) => {
-      const uniqueColumn = captionColumn.replace('[MEMBER_CAPTION]', '[MEMBER_UNIQUE_NAME]')
-      const selectedLevel = selectedLevels[index]
-      const captionRaw = sourceRow[captionColumn] ?? ''
-      const uniqueRaw = sourceRow[uniqueColumn] ?? ''
-
-      targetRow[`level_${index}`] = selectedLevel
-        ? formatLevelCell(selectedLevel, captionRaw, uniqueRaw)
-        : (captionRaw || parseMemberCaption(uniqueRaw) || '-')
+    levelColumns.forEach((binding, index) => {
+      const captionRaw = binding.captionColumn ? (sourceRow[binding.captionColumn] ?? '') : ''
+      const uniqueRaw = binding.uniqueColumn ? (sourceRow[binding.uniqueColumn] ?? '') : ''
+      targetRow[`level_${index}`] = formatLevelCell(binding.level, captionRaw, uniqueRaw) || '-'
     })
 
     valueColumns.forEach((valueColumn, index) => {
@@ -906,6 +978,7 @@ export default function OlapExplorerPage() {
       return
     }
 
+    resetPagination()
     setSelectedLevels((previous) => [...previous, nextLevel])
     setLastAction(`Đã thêm mức ${nextLevel.dimensionLabel} - ${nextLevel.levelLabel}.`)
   }
@@ -924,6 +997,7 @@ export default function OlapExplorerPage() {
       return
     }
 
+    resetPagination()
     setSelectedLevels((previous) => [...previous, nextLevel])
     setLastAction(`Đã thêm mức ${nextLevel.dimensionLabel} - ${nextLevel.levelLabel}.`)
   }
@@ -933,6 +1007,7 @@ export default function OlapExplorerPage() {
       return
     }
 
+    resetPagination()
     setSelectedLevels((previous) => {
       const sourceIndex = previous.findIndex((item) => item.id === draggedId)
       const targetIndex = previous.findIndex((item) => item.id === targetId)
@@ -949,6 +1024,7 @@ export default function OlapExplorerPage() {
   }
 
   const removeLevel = (levelId: string) => {
+    resetPagination()
     setSelectedLevels((previous) => previous.filter((level) => level.id !== levelId))
     setDraftFilters((previous) => omitRecordKey(previous, levelId))
     setAppliedFilters((previous) => omitRecordKey(previous, levelId))
@@ -962,24 +1038,9 @@ export default function OlapExplorerPage() {
       return null
     }
 
-    let chain = dimension.levels
+    const chain = dimension.levels
       .filter((item) => item.hierarchyKey === level.hierarchyKey && item.hierarchyOrder != null)
       .sort((left, right) => (left.hierarchyOrder ?? 0) - (right.hierarchyOrder ?? 0))
-
-    if (chain.length === 0) {
-      const fallbackOrderByDimension: Partial<Record<OlapDimension, string[]>> = {
-        time: ['year', 'quarter', 'month'],
-        store: ['state', 'city', 'store'],
-        customer: ['cityCode', 'customerName'],
-      }
-
-      const fallbackOrder = fallbackOrderByDimension[level.dimension] ?? []
-      if (fallbackOrder.length > 0) {
-        chain = fallbackOrder
-          .map((key) => dimension.levels.find((item) => item.key === key))
-          .filter((item): item is NonNullable<typeof item> => Boolean(item))
-      }
-    }
 
     if (chain.length === 0) {
       return null
@@ -1034,6 +1095,7 @@ export default function OlapExplorerPage() {
       return
     }
 
+    resetPagination()
     setSelectedLevels((previous) =>
       previous.map((item) => {
         if (item.id !== levelId) {
@@ -1087,11 +1149,13 @@ export default function OlapExplorerPage() {
   }
 
   const applyFilters = () => {
+    resetPagination()
     setAppliedFilters(buildLevelValueMap(selectedLevels, draftFilters))
     setLastAction('Đã áp dụng bộ lọc.')
   }
 
   const clearFilters = () => {
+    resetPagination()
     const cleared = buildLevelValueMap(selectedLevels)
     setDraftFilters(cleared)
     setAppliedFilters(cleared)
@@ -1235,9 +1299,6 @@ export default function OlapExplorerPage() {
               )}
             </div>
 
-            <p className="card-note">
-              
-            </p>
           </section>
 
           <section className="content-card">
