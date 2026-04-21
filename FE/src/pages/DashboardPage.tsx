@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom'
+﻿import { Link } from 'react-router-dom'
 import PageHeader from '../components/common/PageHeader'
 import { REPORT_ROUTES } from '../utils/constants'
 
@@ -7,7 +7,6 @@ export default function DashboardPage() {
     <div className="page-stack">
       <PageHeader
         title="Tổng quan hệ thống OLAP"
-        description="Màn hình đơn giản để điều hướng nhanh tới Explorer và các báo cáo."
         action={
           <Link className="btn-primary" to="/olap">
             Mở OLAP Explorer
@@ -37,7 +36,6 @@ export default function DashboardPage() {
             <article className="report-menu-card" key={report.id}>
               <span>{report.shortTitle}</span>
               <h3>{report.fullTitle}</h3>
-              <p>{report.description}</p>
               <Link to={report.path}>Mở báo cáo</Link>
             </article>
           ))}

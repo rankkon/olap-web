@@ -15,7 +15,6 @@ export default function ReportDetailPage() {
     <ReportPageScaffold
       reportId={reportMeta.id}
       title={reportMeta.fullTitle}
-      description={reportMeta.description}
       filterMode={reportMeta.filterMode}
     />
   )

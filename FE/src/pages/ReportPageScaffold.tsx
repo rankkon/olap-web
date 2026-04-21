@@ -13,7 +13,6 @@ import { TIME_OPTIONS } from '../utils/constants'
 interface ReportPageScaffoldProps {
   reportId: number
   title: string
-  description: string
   filterMode?: 'none' | 'year'
 }
 
@@ -27,7 +26,6 @@ function resolveYear(value: string): number {
 export default function ReportPageScaffold({
   reportId,
   title,
-  description,
   filterMode = 'none',
 }: ReportPageScaffoldProps) {
   const [selectedYear, setSelectedYear] = useState<number>(resolveYear(DEFAULT_YEAR_VALUE))
@@ -47,7 +45,6 @@ export default function ReportPageScaffold({
     <div className="page-stack">
       <PageHeader
         title={title}
-        description={description}
         action={
           <div className="header-action-row">
             <span className="badge-note">Bộ lọc: {requiresYearFilter ? 1 : 0}</span>

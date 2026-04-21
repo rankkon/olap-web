@@ -31,7 +31,7 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
     <aside className={`sidebar ${collapsed ? 'is-collapsed' : ''}`}>
       <div className="sidebar-head">
         <div className="brand-block">
-          <p className="brand-kicker">DWH Team</p>
+          <p className="brand-kicker">DWH - nhóm 8</p>
           <h2>OLAP Web</h2>
         </div>
         <button

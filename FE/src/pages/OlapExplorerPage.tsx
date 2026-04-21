@@ -1209,7 +1209,7 @@ export default function OlapExplorerPage() {
             >
               {selectedLevels.length === 0 ? (
                 <p className="card-note">
-                  Kéo mức từ cây chiều dữ liệu vào đây. Nếu không chọn mức nào, bảng sẽ hiển thị tổng độ đo (0 chiều).
+                  Kéo mức từ cây chiều dữ liệu vào đây.
                 </p>
               ) : (
                 <ul className="selected-level-list">
@@ -1274,7 +1274,7 @@ export default function OlapExplorerPage() {
             </div>
 
             <p className="card-note">
-              Nhập các mức theo thứ tự phân tích, bấm Xoay trục để đổi cách nhìn dữ liệu.
+              
             </p>
           </section>
 
