@@ -52,17 +52,6 @@ interface DisplayTable {
   total: number
 }
 
-interface PivotRenderData {
-  levelRows: Array<{
-    label: string
-    values: string[]
-  }>
-  measureRows: Array<{
-    label: string
-    values: string[]
-  }>
-}
-
 interface MemberColumns {
   captionColumn: string
   uniqueColumn: string
@@ -302,6 +291,22 @@ function buildMemberSetExpression(values: string[]): string {
   return `{ ${uniqueMembers.join(', ')} }`
 }
 
+function getMemberPrefixFromLevelExpression(levelExpression: string): string {
+  const match = /^(.*)\.\[[^\]]+\]$/.exec(levelExpression.trim())
+  return match?.[1] ?? levelExpression.trim()
+}
+
+function filterMembersByLevel(values: string[], levelExpression: string): string[] {
+  const memberPrefix = getMemberPrefixFromLevelExpression(levelExpression)
+  return values
+    .map((item) => item.trim())
+    .filter(
+      (item) =>
+        item.startsWith('[')
+        && (item.startsWith(`${memberPrefix}.&[`) || item.startsWith(`${memberPrefix}.[`)),
+    )
+}
+
 function buildCrossJoin(sets: string[]): string {
   if (sets.length === 0) {
     return ''
@@ -335,7 +340,7 @@ function buildExplorerMdx(
 
   const levelSets = selectedLevels.map((level) => {
     const baseSet = `${level.levelExpression}.MEMBERS`
-    const members = appliedFilters[level.id] ?? []
+    const members = filterMembersByLevel(appliedFilters[level.id] ?? [], level.levelExpression)
     if (members.length === 0) {
       return baseSet
     }
@@ -452,27 +457,6 @@ function normalizeFlatTable(
   }
 }
 
-function toPivotRenderData(
-  table: DisplayTable,
-  selectedLevels: SelectedLevel[],
-  measureLabels: string[],
-): PivotRenderData {
-  const levelRows = selectedLevels.map((level, levelIndex) => ({
-    label: level.levelLabel,
-    values: table.rows.map((row) => String(row[`level_${levelIndex}`] ?? '-')),
-  }))
-
-  const measureRows = measureLabels.map((label, measureIndex) => ({
-    label,
-    values: table.rows.map((row) => String(row[`value_${measureIndex}`] ?? '-')),
-  }))
-
-  return {
-    levelRows,
-    measureRows,
-  }
-}
-
 function safeParseLevelPayload(raw: string): LevelDragPayload | null {
   try {
     const parsed = JSON.parse(raw) as Partial<LevelDragPayload>
@@ -502,7 +486,6 @@ export default function OlapExplorerPage() {
   const [selectedMeasureKeys, setSelectedMeasureKeys] = useState<string[]>([])
   const [selectedLevels, setSelectedLevels] = useState<SelectedLevel[]>([])
   const [expandedDimensions, setExpandedDimensions] = useState<Partial<Record<OlapDimension, boolean>>>({})
-  const [isPivoted, setIsPivoted] = useState(false)
   const [refreshToken, setRefreshToken] = useState(0)
   const [, setLastAction] = useState('Sẵn sàng')
   const [mdxPreview, setMdxPreview] = useState('')
@@ -516,7 +499,6 @@ export default function OlapExplorerPage() {
   const [table, setTable] = useState<DisplayTable>(EMPTY_TABLE)
   const tableRef = useRef<DisplayTable>(EMPTY_TABLE)
   const loadMoreScrollYRef = useRef<number | null>(null)
-  const [pivotData, setPivotData] = useState<PivotRenderData | null>(null)
   const [isQueryLoading, setIsQueryLoading] = useState(false)
   const [isLoadingMore, setIsLoadingMore] = useState(false)
   const [rowOffset, setRowOffset] = useState(0)
@@ -556,7 +538,6 @@ export default function OlapExplorerPage() {
     setDraftFilters({})
     setAppliedFilters({})
     setOptionsByLevel({})
-    setIsPivoted(false)
     resetPagination()
   }
 
@@ -768,7 +749,6 @@ export default function OlapExplorerPage() {
       if (!selectedMeasure) {
         tableRef.current = EMPTY_TABLE
         setTable(EMPTY_TABLE)
-        setPivotData(null)
         setHasMoreRows(false)
         setQueryError(null)
         setIsLoadingMore(false)
@@ -823,15 +803,6 @@ export default function OlapExplorerPage() {
         tableRef.current = nextTable
         setTable(nextTable)
         setHasMoreRows(selectedLevels.length > 0 && normalized.rows.length === PAGE_SIZE)
-        setPivotData(
-          selectedLevels.length > 0
-            ? toPivotRenderData(
-              nextTable,
-              selectedLevels,
-              measureLabels,
-            )
-            : null,
-        )
         if (isLoadMoreRequest) {
           restoreScrollAfterLoadMore()
         }
@@ -845,7 +816,6 @@ export default function OlapExplorerPage() {
           setQueryError(message)
           tableRef.current = EMPTY_TABLE
           setTable(EMPTY_TABLE)
-          setPivotData(null)
           setHasMoreRows(false)
         } else {
           setLastAction(`Tải thêm dữ liệu thất bại: ${message}`)
@@ -1086,13 +1056,13 @@ export default function OlapExplorerPage() {
 
     setDraftFilters((previous) => {
       const next = { ...previous }
-      next[target.targetId] = next[levelId] ?? []
+      next[target.targetId] = []
       delete next[levelId]
       return next
     })
     setAppliedFilters((previous) => {
       const next = { ...previous }
-      next[target.targetId] = next[levelId] ?? []
+      next[target.targetId] = []
       delete next[levelId]
       return next
     })
@@ -1134,11 +1104,6 @@ export default function OlapExplorerPage() {
     setLastAction('Đã làm mới dữ liệu từ khối OLAP.')
   }
 
-  const togglePivot = () => {
-    setIsPivoted((previous) => !previous)
-    setLastAction('Đã xoay trục bố cục.')
-  }
-
   const resetLayout = () => {
     clearWorkspaceSelections()
     setLastAction('Đã đặt lại bố cục.')
@@ -1177,9 +1142,6 @@ export default function OlapExplorerPage() {
           <div className="olap-toolbar-actions-row">
             <button className="btn-secondary" type="button" onClick={refreshData}>
               Làm mới
-            </button>
-            <button className="btn-secondary" type="button" onClick={togglePivot}>
-              Xoay trục
             </button>
             <button className="btn-secondary" type="button" onClick={resetLayout}>
               Đặt lại bố cục
@@ -1328,36 +1290,7 @@ export default function OlapExplorerPage() {
 
             {!isQueryLoading && !queryError ? (
               <>
-                {isPivoted && pivotData && pivotData.measureRows.length > 0 ? (
-                  <div className="table-wrap">
-                    <table className="data-table pivot-grid-table">
-                      <thead>
-                        {pivotData.levelRows.map((row, rowIndex) => (
-                          <tr key={`pivot-row-${rowIndex}`}>
-                            <th className="align-center pivot-row-label">{row.label}</th>
-                            {row.values.map((value, colIndex) => (
-                              <th className="align-center" key={`pivot-head-${rowIndex}-${colIndex}`}>
-                                {value}
-                              </th>
-                            ))}
-                          </tr>
-                        ))}
-                      </thead>
-                      <tbody>
-                        {pivotData.measureRows.map((measureRow, rowIndex) => (
-                          <tr key={`pivot-measure-row-${rowIndex}`}>
-                            <td className="align-center pivot-measure-label">{measureRow.label}</td>
-                            {measureRow.values.map((value, colIndex) => (
-                              <td className="align-center" key={`pivot-value-${rowIndex}-${colIndex}`}>
-                                {value}
-                              </td>
-                            ))}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : table.columns.length > 0 ? (
+                {table.columns.length > 0 ? (
                   <DataTable columns={table.columns} rows={table.rows} />
                 ) : (
                   <p className="card-note">Không có dữ liệu để hiển thị.</p>
